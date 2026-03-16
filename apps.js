@@ -1281,6 +1281,22 @@ async function routeRequest(req, res, config) {
   }
 
   if (url.pathname === "/games" || url.pathname.startsWith("/games/")) {
+    const pathDecoded = decodeURIComponent(url.pathname);
+    const withoutPrefix = pathDecoded.slice("/games".length).replace(/^\/+/, "") || ".";
+    const resolved = path.resolve(config.gamesDir, withoutPrefix);
+    if (method === "GET" && isPathInside(config.gamesDir, resolved)) {
+      let targetPath = resolved;
+      try {
+        const st = await fsp.stat(resolved);
+        if (st.isDirectory()) targetPath = path.join(resolved, "index.html");
+        if (st.isFile() || (await fsp.stat(targetPath))) {
+          if (path.extname(targetPath).toLowerCase() === ".html") {
+            await serveGameHtmlWithSaveBridge(req, res, config, targetPath, { allowEmbedding: true });
+            return;
+          }
+        }
+      } catch (_) {}
+    }
     await serveMountedStatic(req, res, config, url.pathname, method, "/games", config.gamesDir, { allowEmbedding: true });
     return;
   }
@@ -2080,6 +2096,75 @@ async function serveMountedStatic(req, res, config, pathname, method, mountPrefi
   }
 
   await sendResolvedFile(res, config, absolutePath, method, headerOptions);
+}
+
+const GAME_SAVE_BRIDGE_SCRIPT = `
+(function(){
+  var store = {};
+  var syncTimeout;
+  function snapshot() {
+    var out = {};
+    for (var k in store) if (Object.prototype.hasOwnProperty.call(store, k)) out[k] = store[k];
+    return out;
+  }
+  function sendSync() {
+    if (syncTimeout) clearTimeout(syncTimeout);
+    syncTimeout = setTimeout(function() {
+      syncTimeout = null;
+      try { window.opener && window.opener.postMessage({ type: 'palladium-save-sync', data: snapshot() }, '*'); } catch (e) {}
+      try { window.parent && window.parent !== window && window.parent.postMessage({ type: 'palladium-save-sync', data: snapshot() }, '*'); } catch (e) {}
+    }, 150);
+  }
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'palladium-save-load' && e.data.data && typeof e.data.data === 'object') {
+      for (var k in store) delete store[k];
+      for (var k in e.data.data) if (Object.prototype.hasOwnProperty.call(e.data.data, k)) store[k] = e.data.data[k];
+    }
+  });
+  try {
+    if (window.opener) window.opener.postMessage({ type: 'palladium-save-ready' }, '*');
+    if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'palladium-save-ready' }, '*');
+  } catch (err) {}
+  var proto = Object.create(null);
+  proto.getItem = function(key) { return store.hasOwnProperty(key) ? store[key] : null; };
+  proto.setItem = function(key, val) { store[String(key)] = String(val); sendSync(); };
+  proto.removeItem = function(key) { delete store[key]; sendSync(); };
+  proto.clear = function() { store = {}; sendSync(); };
+  proto.key = function(i) { var keys = Object.keys(store); return keys[i] || null; };
+  Object.defineProperty(proto, 'length', { get: function() { return Object.keys(store).length; }, configurable: true });
+  try {
+    var wrap = { __store: store, getItem: proto.getItem, setItem: proto.setItem, removeItem: proto.removeItem, clear: proto.clear, key: proto.key, length: 0 };
+    Object.defineProperty(wrap, 'length', { get: function() { return Object.keys(this.__store).length; }, configurable: true });
+    Object.defineProperty(window, 'localStorage', { value: wrap, configurable: true, writable: true });
+  } catch (e) {}
+})();
+`;
+
+async function serveGameHtmlWithSaveBridge(req, res, config, filePath, headerOptions = {}) {
+  let html;
+  try {
+    html = await fsp.readFile(filePath, "utf8");
+  } catch {
+    sendText(res, 404, "Not found", config);
+    return;
+  }
+  const inject = "<script>" + GAME_SAVE_BRIDGE_SCRIPT + "</script>";
+  let injected;
+  if (/<head\s*[^>]*>/i.test(html)) {
+    injected = html.replace(/(<head\s*[^>]*>)/i, "$1" + inject);
+  } else if (/<!DOCTYPE/i.test(html)) {
+    injected = html.replace(/(<!DOCTYPE[^>]*>)/i, "$1" + inject);
+  } else {
+    injected = inject + html;
+  }
+  const buf = Buffer.from(injected, "utf8");
+  addCors(res, config);
+  addSecurityHeaders(res, headerOptions);
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": String(buf.length)
+  });
+  res.end(buf);
 }
 
 async function sendResolvedFile(res, config, absolutePath, method, headerOptions = {}) {
