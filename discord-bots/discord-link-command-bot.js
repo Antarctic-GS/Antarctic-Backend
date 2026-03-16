@@ -35,6 +35,9 @@ const state = loadState();
 if (!state.lastMessageIds || typeof state.lastMessageIds !== "object") state.lastMessageIds = {};
 if (!state.bootstrapped || typeof state.bootstrapped !== "object") state.bootstrapped = {};
 state.savedLinks = sanitizeSavedLinks(state.savedLinks);
+if (state.savedLinks.length > 0) {
+  console.log(`Link bot: loaded ${state.savedLinks.length} saved link(s) from ${STATE_PATH}`);
+}
 
 let appId = "";
 let guildIds = [];
@@ -139,9 +142,11 @@ function loadState() {
 
 function saveState() {
   try {
+    const dir = path.dirname(STATE_PATH);
+    if (dir) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
-  } catch {
-    // Non-fatal: in-memory state still prevents duplicates during this run.
+  } catch (err) {
+    console.warn("Link bot: could not save state to", STATE_PATH, err && err.message);
   }
 }
 
