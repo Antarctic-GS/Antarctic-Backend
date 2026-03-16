@@ -1,0 +1,13 @@
+{
+  "name": "palladium-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Palladium backend runtime (API + bots + hosted games)",
+  "main": "apps.js",
+  "scripts": {
+    "start": "node apps.js",
+    "start:dev": "SITE_PORT=3000 node apps.js",
+    "test": "node --test tests/*.test.js",
+    "verify": "node scripts/verify.js && npm run test"
+  }
+}
