@@ -202,5 +202,11 @@
     "author": "Orteil",
     "image": "images/game-img/cookie-clicker.png",
     "category": "clickers"
+  },
+  "games/fnaf/fnaw.html": {
+    "title": "Five Night's At Winston's",
+    "author": "lax1dude",
+    "image": "images/game-img/fnaw.png",
+    "category": "fnaf"
   }
 }
