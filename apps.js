@@ -2127,26 +2127,34 @@ const GAME_SAVE_BRIDGE_SCRIPT = `
   function installProxy() {
     if (proxyInstalled) return;
     proxyInstalled = true;
-    var proto = Object.create(null);
-    proto.getItem = function(key) { return store.hasOwnProperty(key) ? store[key] : null; };
-    proto.setItem = function(key, val) { store[String(key)] = String(val); sendSync(); };
-    proto.removeItem = function(key) { delete store[key]; sendSync(); };
-    proto.clear = function() { store = {}; sendSync(); };
-    proto.key = function(i) { var keys = Object.keys(store); return keys[i] || null; };
-    Object.defineProperty(proto, 'length', { get: function() { return Object.keys(store).length; }, configurable: true });
     try {
-      var wrap = { __store: store, getItem: proto.getItem, setItem: proto.setItem, removeItem: proto.removeItem, clear: proto.clear, key: proto.key, length: 0 };
-      Object.defineProperty(wrap, 'length', { get: function() { return Object.keys(this.__store).length; }, configurable: true });
+      var wrap = {
+        getItem: function(key) { return store.hasOwnProperty(key) ? store[key] : null; },
+        setItem: function(key, val) { store[String(key)] = String(val); sendSync(); },
+        removeItem: function(key) { delete store[key]; sendSync(); },
+        clear: function() { store = {}; sendSync(); },
+        key: function(i) { var keys = Object.keys(store); return keys[i] || null; }
+      };
+      Object.defineProperty(wrap, 'length', { get: function() { return Object.keys(store).length; }, configurable: true, enumerable: false });
       Object.defineProperty(window, 'localStorage', { value: wrap, configurable: true, writable: true });
-    } catch (e) {}
+    } catch (e) {
+      var real = window.localStorage;
+      if (real && typeof real.setItem === 'function') {
+        real.getItem = function(key) { return store.hasOwnProperty(key) ? store[key] : null; };
+        real.setItem = function(key, val) { store[String(key)] = String(val); sendSync(); };
+        real.removeItem = function(key) { delete store[key]; sendSync(); };
+        real.clear = function() { store = {}; sendSync(); };
+        real.key = function(i) { return Object.keys(store)[i] || null; };
+      }
+    }
   }
   window.addEventListener('message', function(e) {
     if (e.data && e.data.type === 'palladium-save-load' && e.data.data && typeof e.data.data === 'object') {
       for (var k in store) delete store[k];
       for (var k in e.data.data) if (Object.prototype.hasOwnProperty.call(e.data.data, k)) store[k] = e.data.data[k];
-      installProxy();
     }
   });
+  installProxy();
   function sendReady() {
     try {
       if (window.opener) window.opener.postMessage({ type: 'palladium-save-ready' }, '*');
@@ -2154,10 +2162,9 @@ const GAME_SAVE_BRIDGE_SCRIPT = `
     } catch (err) {}
   }
   sendReady();
-  setTimeout(sendReady, 100);
-  setTimeout(function() {
-    if (!proxyInstalled) installProxy();
-  }, 500);
+  setTimeout(sendReady, 50);
+  setTimeout(sendReady, 150);
+  setTimeout(sendReady, 400);
 })();
 `;
 
@@ -2170,14 +2177,7 @@ async function serveGameHtmlWithSaveBridge(req, res, config, filePath, headerOpt
     return;
   }
   const inject = "<script>" + GAME_SAVE_BRIDGE_SCRIPT + "</script>";
-  let injected;
-  if (/<head\s*[^>]*>/i.test(html)) {
-    injected = html.replace(/(<head\s*[^>]*>)/i, "$1" + inject);
-  } else if (/<!DOCTYPE/i.test(html)) {
-    injected = html.replace(/(<!DOCTYPE[^>]*>)/i, "$1" + inject);
-  } else {
-    injected = inject + html;
-  }
+  const injected = inject + html;
   const buf = Buffer.from(injected, "utf8");
   addCors(res, config);
   addSecurityHeaders(res, headerOptions);
