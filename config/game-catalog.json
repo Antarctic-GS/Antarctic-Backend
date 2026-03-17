@@ -143,12 +143,6 @@
     "image": "images/game-img/ovo.png",
     "category": "platformer"
   },
-  "games/platformer/crossy-road.html": {
-    "title": "Crossy Road",
-    "author": "Hipster Whale",
-    "image": "images/game-img/crossy-road.png",
-    "category": "platformer"
-  },
   "games/bullet-hell/brotato.html": {
     "title": "Brotato",
     "author": "Blobfish",
