@@ -17,6 +17,8 @@ const ADMINISTRATOR_PERMISSION = 0x00000008n;
 const MANAGE_GUILD_PERMISSION = 0x00000020n;
 const MANAGE_MESSAGES_PERMISSION = 0x00002000n;
 const MAX_SAVED_LINKS = Math.max(10, Number(process.env.DISCORD_LINK_MAX_SAVED_LINKS || 250));
+const GETLINK_LIMIT_PER_WEEK = Math.max(1, Number(process.env.DISCORD_LINK_GETLINK_LIMIT_PER_WEEK || 2));
+const GETLINK_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 const BOT_TOKEN = normalizeDiscordToken(
   process.env.DISCORD_BOT_TOKEN ||
@@ -34,6 +36,7 @@ const CHANNEL_IDS = parseChannelIds(
 const state = loadState();
 if (!state.lastMessageIds || typeof state.lastMessageIds !== "object") state.lastMessageIds = {};
 if (!state.bootstrapped || typeof state.bootstrapped !== "object") state.bootstrapped = {};
+if (!state.getlinkUsage || typeof state.getlinkUsage !== "object") state.getlinkUsage = {};
 state.savedLinks = sanitizeSavedLinks(state.savedLinks);
 if (state.savedLinks.length > 0) {
   console.log(`Link bot: loaded ${state.savedLinks.length} saved link(s) from ${STATE_PATH}`);
@@ -964,6 +967,20 @@ async function handleSlashAddLinkInteraction(interaction) {
   );
 }
 
+function getGetlinkUsageInWindow(userId) {
+  const list = state.getlinkUsage[userId];
+  if (!Array.isArray(list)) return [];
+  const cutoff = Date.now() - GETLINK_WINDOW_MS;
+  return list.filter((t) => typeof t === "number" && t >= cutoff);
+}
+
+function recordGetlinkUse(userId) {
+  if (!userId) return;
+  const list = getGetlinkUsageInWindow(userId);
+  list.push(Date.now());
+  state.getlinkUsage[userId] = list;
+}
+
 async function handleSlashGetLinkInteraction(interaction) {
   if (!(await ensureAllowedInteractionChannel(interaction))) return;
 
@@ -972,6 +989,24 @@ async function handleSlashGetLinkInteraction(interaction) {
     await replyEphemeral(interaction, "No saved links have been added yet. Ask an admin to use /addlink first.");
     return;
   }
+
+  const userId = interactionUserId(interaction);
+  const usedInWindow = getGetlinkUsageInWindow(userId);
+  if (usedInWindow.length >= GETLINK_LIMIT_PER_WEEK) {
+    const oldest = Math.min(...usedInWindow);
+    const resetsAt = oldest + GETLINK_WINDOW_MS;
+    const msLeft = Math.max(0, resetsAt - Date.now());
+    const hoursLeft = Math.ceil(msLeft / (60 * 60 * 1000));
+    const message =
+      hoursLeft >= 24
+        ? `You've used /getlink ${GETLINK_LIMIT_PER_WEEK} times this week. Limit resets in about ${Math.ceil(hoursLeft / 24)} day(s).`
+        : `You've used /getlink ${GETLINK_LIMIT_PER_WEEK} times this week. Limit resets in about ${hoursLeft} hour(s).`;
+    await replyEphemeral(interaction, message);
+    return;
+  }
+
+  recordGetlinkUse(userId);
+  saveState();
 
   await interactionCallback(interaction.id, interaction.token, {
     type: 4,
