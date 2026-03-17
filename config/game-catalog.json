@@ -196,5 +196,11 @@
     "author": "Unknown",
     "image": "images/game-img/snow-rider.png",
     "category": "racing"
+  },
+    "games/clickers/cookie-clicker.html": {
+    "title": "Cookie Clicker",
+    "author": "Orteil",
+    "image": "images/game-img/cookie-clicker.png",
+    "category": "clickers"
   }
 }
