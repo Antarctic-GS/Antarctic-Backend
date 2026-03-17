@@ -111,9 +111,9 @@ test("games api serves discovered catalog entries and backend thumbnails", async
   assert.equal(impossibleThumbResponse.status, 200);
   assert.match(impossibleThumbResponse.headers.get("content-type") || "", /^image\//i);
 
-  const superChibiThumbResponse = await fetch(`http://127.0.0.1:${port}${superChibiKnight.image}`);
-  assert.equal(superChibiThumbResponse.status, 200);
-  assert.match(superChibiThumbResponse.headers.get("content-type") || "", /^image\//i);
+  const chibiThumbResponse = await fetch(`http://127.0.0.1:${port}${chibiKnight.image}`);
+  assert.equal(chibiThumbResponse.status, 200);
+  assert.match(chibiThumbResponse.headers.get("content-type") || "", /^image\//i);
 
   const gameResponse = await fetch(`http://127.0.0.1:${port}/games/bullet-hell/brotato.html`);
   assert.equal(gameResponse.status, 200);
