@@ -18,6 +18,7 @@ const HAS_FRONTEND_DIR = fs.existsSync(path.join(FRONTEND_DIR, "index.html"));
 const REQUIRED_FRONTEND_FILES = [
   "index.html",
   "styles.css",
+  "settings-shell.css",
   "backend.js",
   "games-static.js",
   "shell-core.js",
@@ -50,6 +51,7 @@ test("frontend shell ships the built-in games search box", () => {
   assert.match(shellPage, /games-search-input/);
   assert.match(shellPage, /Search games, authors, or categories/);
   assert.match(shellPage, /palladium:\/\/games/);
+  assert.match(shellPage, /palladium:\/\/settings/);
   assert.match(shellPage, /scram\/scramjet\.all\.js/);
   assert.match(shellPage, /baremux\/index\.js/);
 });
@@ -78,6 +80,14 @@ test("frontend directory keeps shared images available for the static host", () 
     assert.ok(fs.existsSync(path.join(FRONTEND_DIR, "libcurl", "index.mjs")));
   }
   assert.ok(fs.existsSync(path.join(BACKEND_DIR, "images", "game-img")));
+});
+
+test("backend owns the proxy sync tooling while frontend keeps only static runtime assets", () => {
+  assert.ok(fs.existsSync(path.join(BACKEND_DIR, "scripts", "sync-frontend-proxy-assets.js")));
+
+  if (HAS_FRONTEND_DIR) {
+    assert.ok(!fs.existsSync(path.join(FRONTEND_DIR, "scripts", "sync-proxy-assets.js")));
+  }
 });
 
 test("repo root no longer needs duplicate static page copies", () => {

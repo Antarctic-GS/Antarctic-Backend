@@ -51,3 +51,4 @@ Scramjet split:
 - keep the live proxy transport on this backend at `/wisp/`
 - let the frontend read `/api/config/public` and `/api/proxy/health`
 - point production traffic at `https://api.sethpang.com`
+- sync the committed frontend proxy runtime from here with `npm run sync:frontend-proxy`
