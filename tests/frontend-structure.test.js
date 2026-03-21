@@ -50,8 +50,8 @@ test("frontend shell ships the built-in games search box", () => {
   const shellPage = fs.readFileSync(path.join(FRONTEND_DIR, "index.html"), "utf8");
   assert.match(shellPage, /games-search-input/);
   assert.match(shellPage, /Search games, authors, or categories/);
-  assert.match(shellPage, /palladium:\/\/games/);
-  assert.match(shellPage, /palladium:\/\/settings/);
+  assert.match(shellPage, /antarctic:\/\/games/);
+  assert.match(shellPage, /antarctic:\/\/settings/);
   assert.match(shellPage, /scram\/scramjet\.all\.js/);
   assert.match(shellPage, /baremux\/index\.js/);
 });
