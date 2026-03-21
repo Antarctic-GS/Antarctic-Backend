@@ -5,8 +5,8 @@ This backend is the API side of Antarctic Games. It is meant to run behind `api.
 Daily use:
 
 1. Update `config/palladium.env` with your host, port, Ollama settings, Discord tokens, and any proxy base override.
-2. Run `npm install` if dependencies are missing.
-3. Start the service with `./start.sh` or `npm start`.
+2. Start the service with `./start.sh` or `npm start`.
+3. If you prefer doing the install step manually, run `npm ci --omit=dev` before starting.
 4. Verify the runtime with `GET /health` and `GET /api/proxy/health`.
 
 Supported backend features:

@@ -26,6 +26,8 @@ cd palladium-backend
 ./start.sh
 ```
 
+`./start.sh` will create `config/palladium.env` from the example file on first run and bootstrap runtime dependencies with `npm ci --omit=dev` if `node_modules` is missing or incomplete.
+
 Production target:
 
 - point `api.sethpang.com` at this backend

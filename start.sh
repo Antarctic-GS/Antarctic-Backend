@@ -10,6 +10,8 @@ if [[ ! -f "config/palladium.env" ]]; then
   echo "Created config/palladium.env from template. Fill in tokens and settings as needed."
 fi
 
+node scripts/ensure-runtime-deps.js
+
 while true; do
   set +e
   node apps.js

@@ -6,7 +6,8 @@ const { execFileSync } = require("node:child_process");
 const backendDir = path.resolve(__dirname, "..");
 const filesToCheck = [
   path.join(backendDir, "apps.js"),
-  path.join(backendDir, "server.js")
+  path.join(backendDir, "server.js"),
+  path.join(backendDir, "scripts", "ensure-runtime-deps.js")
 ];
 
 for (const filePath of filesToCheck) {
