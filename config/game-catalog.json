@@ -17,6 +17,12 @@
     "image": "images/game-img/learn-to-fly3.png",
     "category": "l2f"
   },
+  "games/clickers/adventure-capitalist.html": {
+    "title": "AdVenture Capitalist!",
+    "author": "Hyper Hippo Games",
+    "image": "images/game-img/adventure-capitalist.png",
+    "category": "clickers"
+  },
   "games/stick-ragdoll/ragdoll-archers.html": {
     "title": "Ragdoll Archers",
     "author": "Studio Minus",

@@ -70,6 +70,12 @@ test("games api serves discovered catalog entries and backend thumbnails", async
   assert.ok(payload.games.length >= 20);
   assert.ok(!payload.games.some((entry) => /stick-war/i.test(entry.path)), "Stick War games should not remain in the backend catalog.");
 
+  const adventureCapitalist = payload.games.find((entry) => entry.path === "games/clickers/adventure-capitalist.html");
+  assert.ok(adventureCapitalist, "Expected AdVenture Capitalist! in the games catalog");
+  assert.equal(adventureCapitalist.title, "AdVenture Capitalist!");
+  assert.equal(adventureCapitalist.author, "Hyper Hippo Games");
+  assert.equal(adventureCapitalist.image, "/images/game-img/adventure-capitalist.png");
+
   const brotato = payload.games.find((entry) => entry.path === "games/bullet-hell/brotato.html");
   assert.ok(brotato, "Expected Brotato in the games catalog");
   assert.equal(brotato.title, "Brotato");
@@ -107,6 +113,10 @@ test("games api serves discovered catalog entries and backend thumbnails", async
   const achievementThumbResponse = await fetch(`http://127.0.0.1:${port}${achievementUnlocked.image}`);
   assert.equal(achievementThumbResponse.status, 200);
   assert.match(achievementThumbResponse.headers.get("content-type") || "", /^image\//i);
+
+  const adventureCapitalistThumbResponse = await fetch(`http://127.0.0.1:${port}${adventureCapitalist.image}`);
+  assert.equal(adventureCapitalistThumbResponse.status, 200);
+  assert.match(adventureCapitalistThumbResponse.headers.get("content-type") || "", /^image\//i);
 
   const impossibleThumbResponse = await fetch(`http://127.0.0.1:${port}${impossibleQuiz.image}`);
   assert.equal(impossibleThumbResponse.status, 200);

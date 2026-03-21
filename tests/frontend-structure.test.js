@@ -122,6 +122,16 @@ test("backend Cookie Clicker launcher uses the GitHub-backed mirror", () => {
   assert.doesNotMatch(source, /cdn\.jsdelivr\.net\/gh\/bubbls\/UGS-Assets/);
 });
 
+test("frontend and backend both ship AdVenture Capitalist assets", () => {
+  if (HAS_FRONTEND_DIR) {
+    assert.ok(fs.existsSync(path.join(FRONTEND_DIR, "games", "clickers", "adventure-capitalist.html")));
+    assert.ok(fs.existsSync(path.join(FRONTEND_DIR, "images", "game-img", "adventure-capitalist.png")));
+  }
+
+  assert.ok(fs.existsSync(path.join(BACKEND_DIR, "games", "clickers", "adventure-capitalist.html")));
+  assert.ok(fs.existsSync(path.join(BACKEND_DIR, "images", "game-img", "adventure-capitalist.png")));
+});
+
 test("backend no longer ships removed Stick War launchers", () => {
   assert.ok(!fs.existsSync(path.join(BACKEND_DIR, "games", "swf", "stick-war-1.html")));
   assert.ok(!fs.existsSync(path.join(BACKEND_DIR, "games", "stick-ragdoll", "stick-war-legacy.html")));
