@@ -2,7 +2,7 @@
   "name": "palladium-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "Palladium backend runtime (API + bots + hosted games)",
+  "description": "Antarctic backend runtime (Discord + AI + proxy APIs)",
   "main": "apps.js",
   "scripts": {
     "start": "node apps.js",

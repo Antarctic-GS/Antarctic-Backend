@@ -7,6 +7,7 @@ const {
   hasLinkAdminPermissions,
   normalizeSavedLinkEntry,
   pickSavedLink,
+  resolveAppsBases,
   sanitizeSavedLinks,
   upsertSavedLink,
 } = require("../discord-bots/discord-link-command-bot");
@@ -97,3 +98,30 @@ test("saved link payload presents the link and pool metadata", () => {
   assert.equal(payload.embeds[0].fields[0].value, "<@42>");
   assert.equal(payload.embeds[0].fields[1].value, "7");
 });
+
+test("apps base resolution accepts Antarctic env aliases", () => {
+  const previousAntarctic = process.env.ANTARCTIC_APPS_URL;
+  const previousPalladium = process.env.PALLADIUM_APPS_URL;
+  const previousBackend = process.env.BACKEND_BASE_URL;
+
+  process.env.ANTARCTIC_APPS_URL = "api.sethpang.com";
+  process.env.PALLADIUM_APPS_URL = "";
+  process.env.BACKEND_BASE_URL = "";
+
+  try {
+    const bases = resolveAppsBases();
+    assert.equal(bases[0], "http://api.sethpang.com");
+  } finally {
+    restoreEnv("ANTARCTIC_APPS_URL", previousAntarctic);
+    restoreEnv("PALLADIUM_APPS_URL", previousPalladium);
+    restoreEnv("BACKEND_BASE_URL", previousBackend);
+  }
+});
+
+function restoreEnv(key, value) {
+  if (typeof value === "undefined") {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}

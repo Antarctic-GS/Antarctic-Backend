@@ -10,30 +10,6 @@ const { server: wispServer } = require("@mercuryworkshop/wisp-js/server");
 const ROOT_DIR = __dirname;
 const DEFAULT_CONFIG_PATH = path.join(ROOT_DIR, "config", "palladium.env");
 const DEFAULT_CONFIG_TEMPLATE_PATH = path.join(ROOT_DIR, "config", "palladium.env.example");
-const DEFAULT_GAME_CATALOG_PATH = path.join(ROOT_DIR, "config", "game-catalog.json");
-const DEFAULT_PLAY_STATS_PATH = path.join(ROOT_DIR, "config", "game-play-stats.json");
-
-const MIME_TYPES = {
-  ".css": "text/css; charset=utf-8",
-  ".gif": "image/gif",
-  ".html": "text/html; charset=utf-8",
-  ".ico": "image/x-icon",
-  ".jpeg": "image/jpeg",
-  ".jpg": "image/jpeg",
-  ".js": "application/javascript; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".mjs": "application/javascript; charset=utf-8",
-  ".mp3": "audio/mpeg",
-  ".mp4": "video/mp4",
-  ".png": "image/png",
-  ".svg": "image/svg+xml",
-  ".swf": "application/x-shockwave-flash",
-  ".txt": "text/plain; charset=utf-8",
-  ".wasm": "application/wasm",
-  ".webm": "video/webm",
-  ".woff": "font/woff",
-  ".woff2": "font/woff2"
-};
 
 const BROWSER_FETCH_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -41,26 +17,6 @@ const BROWSER_FETCH_USER_AGENT =
 const DEFAULT_DISCORD_WIDGET_URL = "https://discord.com/api/guilds/1479914434460913707/widget.json";
 const DEFAULT_DISCORD_INVITE_URL = "https://discord.gg/FNACSCcE26";
 const SCRAMJET_WISP_PATH = "/wisp/";
-
-const STATIC_BLOCKED_ROOTS = new Set([
-  ".git",
-  ".github",
-  ".vscode",
-  "config",
-  "discord-bots",
-  "node_modules",
-  "services"
-]);
-
-const STATIC_BLOCKED_TOP_LEVEL_FILES = new Set([
-  ".discord-community-bot-state.json",
-  "agents.md",
-  "apps.js",
-  "package-lock.json",
-  "package.json",
-  "readme.md",
-  "start.sh"
-]);
 
 const PROVIDER_SIGNATURES = [
   {
@@ -172,14 +128,6 @@ const managed = {
   }
 };
 
-const playStatsState = {
-  loaded: false,
-  entries: new Map(),
-  flushTimer: null,
-  flushInFlight: Promise.resolve(),
-  lastSavedAt: ""
-};
-
 main().catch((error) => {
   console.error("Fatal startup error:", error);
   shutdown(1);
@@ -190,7 +138,6 @@ async function main() {
   await ensureConfigExists(configPath);
   const fileEnv = await readEnvFile(configPath);
   const env = { ...fileEnv, ...process.env };
-  const defaultFrontendSetting = path.join("..", "frontend");
 
   const config = {
     rootDir: ROOT_DIR,
@@ -198,17 +145,10 @@ async function main() {
     host: readString(env, "SITE_HOST", "0.0.0.0"),
     port: readInt(env, "SITE_PORT", 443),
     corsOrigin: readString(env, "CORS_ORIGIN", "*"),
-    frontendDir: resolveFrontendDir(readString(env, "FRONTEND_DIR", defaultFrontendSetting), defaultFrontendSetting),
-    gamesDir: resolvePath(readString(env, "GAMES_DIR", "games")),
-    swfDir: resolvePath(readString(env, "SWF_DIR", "swf")),
-    gameImageDir: resolvePath(readString(env, "GAME_IMAGE_DIR", path.join("images", "game-img"))),
-    gameCatalogPath: resolvePath(readString(env, "GAME_CATALOG_PATH", DEFAULT_GAME_CATALOG_PATH)),
     requestTimeoutMs: readInt(env, "REQUEST_TIMEOUT_MS", 25_000),
     maxRequestBodyBytes: readInt(env, "MAX_REQUEST_BODY_BYTES", 131072),
     aiRequestTimeoutMs: readInt(env, "AI_REQUEST_TIMEOUT_MS", 120_000),
-    monochromeBaseUrl: readString(env, "MONOCHROME_BASE_URL", "https://monochrome.tf"),
     proxyBaseUrl: readString(env, "PROXY_BASE_URL", ""),
-    playStatsPath: resolvePath(readString(env, "PLAY_STATS_PATH", DEFAULT_PLAY_STATS_PATH)),
     discordWidgetUrl: readString(env, "DISCORD_WIDGET_URL", DEFAULT_DISCORD_WIDGET_URL),
     discordInviteUrl: readString(env, "DISCORD_INVITE_URL", DEFAULT_DISCORD_INVITE_URL),
 
@@ -264,7 +204,6 @@ async function main() {
     autoPullCommandTimeoutMs: readInt(env, "GIT_AUTO_PULL_COMMAND_TIMEOUT_MS", 90_000)
   };
 
-  validatePaths(config);
   managed.runtime.config = config;
 
   process.on("SIGINT", () => shutdown(0));
@@ -284,13 +223,8 @@ async function main() {
 
   await startHttpServer(config);
 
-  console.log("Palladium monolith running.");
+  console.log("Antarctic backend running.");
   console.log(`Site:     http://${displayHost(config.host)}:${config.port}`);
-  console.log(`Frontend: ${config.frontendDir || "disabled (backend-only mode)"}`);
-  console.log(`Games:    ${config.gamesDir}`);
-  console.log(`SWF:      ${config.swfDir}`);
-  console.log(`Thumbs:   ${config.gameImageDir}`);
-  console.log(`Catalog:  ${config.gameCatalogPath}`);
   console.log(`Config:   ${config.configPath}`);
   console.log(`Ollama:   ${managed.runtimeStatus.ollama}`);
   console.log(`Discord:  ${managed.runtimeStatus.discord}`);
@@ -385,53 +319,6 @@ function readBool(env, key, fallback) {
   if (raw === "true" || raw === "1" || raw === "yes" || raw === "on") return true;
   if (raw === "false" || raw === "0" || raw === "no" || raw === "off") return false;
   return fallback;
-}
-
-function resolveFrontendDir(value, fallbackValue) {
-  if (isDisabledPathSetting(value)) {
-    return "";
-  }
-
-  const configured = resolvePath(value || fallbackValue);
-  if (isFrontendDir(configured)) {
-    return configured;
-  }
-
-  const fallback = resolvePath(fallbackValue);
-  if (isFrontendDir(fallback)) {
-    if (normalizeSlash(configured) !== normalizeSlash(fallback)) {
-      console.warn(`Frontend directory ${configured} is invalid. Falling back to ${fallback}.`);
-    }
-    return fallback;
-  }
-
-  return "";
-}
-
-function isDisabledPathSetting(value) {
-  const normalized = String(value || "").trim().toLowerCase();
-  return normalized === "disabled" || normalized === "off" || normalized === "none";
-}
-
-function isFrontendDir(targetPath) {
-  if (!targetPath || !fs.existsSync(targetPath)) return false;
-  try {
-    return fs.statSync(targetPath).isDirectory() && fs.existsSync(path.join(targetPath, "index.html"));
-  } catch {
-    return false;
-  }
-}
-
-function validatePaths(config) {
-  if (!fs.existsSync(config.gamesDir)) {
-    throw new Error(`Games directory does not exist: ${config.gamesDir}`);
-  }
-  if (!fs.existsSync(config.swfDir)) {
-    throw new Error(`SWF directory does not exist: ${config.swfDir}`);
-  }
-  if (!fs.existsSync(config.gameImageDir)) {
-    throw new Error(`Game image directory does not exist: ${config.gameImageDir}`);
-  }
 }
 
 async function ensureConfigExists(configPath) {
@@ -590,6 +477,7 @@ async function startDiscordBotsIfNeeded(config) {
     DISCORD_RULES_CHANNEL_ID: config.discordRulesChannelId,
     OLLAMA_BASE_URL: config.ollamaBaseUrl,
     OLLAMA_MODEL: config.ollamaModel,
+    ANTARCTIC_APPS_URL: appsBase,
     PALLADIUM_APPS_URL: appsBase
   };
 
@@ -929,14 +817,10 @@ async function routeRequest(req, res, config) {
       200,
       {
         ok: true,
-        service: "palladium-monolith",
+        service: "antarctic-backend",
         time: new Date().toISOString(),
         runtime: managed.runtimeStatus,
         features: [
-          "static-frontend",
-          "api/games",
-          "api/games/trending",
-          "api/games/play",
           "api/proxy/fetch",
           "wisp",
           "api/ai/chat",
@@ -999,9 +883,6 @@ async function routeRequest(req, res, config) {
           wispPath: SCRAMJET_WISP_PATH,
           wispUrl: toWebSocketUrl(backendOrigin, SCRAMJET_WISP_PATH),
           aiChat: "/api/ai/chat",
-          assetBase: backendOrigin,
-          gamesBase: backendOrigin,
-          monochromeBase: config.monochromeBaseUrl,
           defaultAiModel: config.ollamaModel
         },
         discord: {
@@ -1018,115 +899,6 @@ async function routeRequest(req, res, config) {
       },
       config
     );
-    return;
-  }
-
-  if (url.pathname === "/api/games" && (method === "GET" || method === "HEAD")) {
-    const allGames = await loadGamesCatalog(config);
-    const query = (url.searchParams.get("q") || "").trim().toLowerCase();
-    const category = (url.searchParams.get("category") || "").trim().toLowerCase();
-
-    const filtered = allGames.filter((entry) => {
-      const categoryMatch = !category || category === "all" || entry.category.toLowerCase() === category;
-      if (!categoryMatch) return false;
-      if (!query) return true;
-      return (
-        entry.title.toLowerCase().includes(query) ||
-        entry.author.toLowerCase().includes(query) ||
-        entry.file.toLowerCase().includes(query) ||
-        entry.category.toLowerCase().includes(query)
-      );
-    });
-
-    const categories = countCategories(allGames);
-    sendJson(
-      res,
-      200,
-      {
-        ok: true,
-        count: filtered.length,
-        total: allGames.length,
-        categories,
-        games: filtered
-      },
-      config,
-      method === "HEAD"
-    );
-    return;
-  }
-
-  if (url.pathname === "/api/games/trending" && (method === "GET" || method === "HEAD")) {
-    const requestedLimit = Number.parseInt(url.searchParams.get("limit") || "", 10);
-    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 24) : 8;
-
-    const payload = await getTrendingGames(config, limit);
-    sendJson(
-      res,
-      200,
-      {
-        ok: true,
-        count: payload.games.length,
-        limit,
-        trackedGames: payload.trackedGames,
-        totalPlays: payload.totalPlays,
-        updatedAt: payload.updatedAt,
-        games: payload.games
-      },
-      config,
-      method === "HEAD"
-    );
-    return;
-  }
-
-  if (url.pathname === "/api/games/play" && method === "POST") {
-    let body;
-    try {
-      body = await readRequestBody(req, Math.min(config.maxRequestBodyBytes, 32_768));
-    } catch (error) {
-      sendJson(res, 413, { ok: false, error: String(error?.message || "Request body too large") }, config);
-      return;
-    }
-
-    const raw = body.toString("utf8").trim();
-    if (!raw) {
-      sendJson(res, 400, { ok: false, error: "Request body is required" }, config);
-      return;
-    }
-
-    const parsed = parseJsonObject(raw);
-    if (!parsed) {
-      sendJson(res, 400, { ok: false, error: "Request body must be valid JSON." }, config);
-      return;
-    }
-
-    const normalizedPlay = normalizePlayPayload(parsed);
-    if (!normalizedPlay) {
-      sendJson(res, 400, { ok: false, error: "Invalid game play payload." }, config);
-      return;
-    }
-
-    const recorded = await recordGamePlay(config, normalizedPlay);
-    sendJson(
-      res,
-      200,
-      {
-        ok: true,
-        game: {
-          path: recorded.path,
-          title: recorded.title,
-          author: recorded.author,
-          count: recorded.count,
-          lastPlayedAt: recorded.lastPlayedAt
-        }
-      },
-      config
-    );
-    return;
-  }
-
-  if (url.pathname === "/api/categories" && (method === "GET" || method === "HEAD")) {
-    const categories = countCategories(await loadGamesCatalog(config));
-    sendJson(res, 200, { ok: true, count: categories.length, categories }, config, method === "HEAD");
     return;
   }
 
@@ -1261,6 +1033,7 @@ async function routeRequest(req, res, config) {
     const body = Buffer.from(await response.arrayBuffer());
     const headers = {
       "content-type": response.headers.get("content-type") || "application/octet-stream",
+      "x-antarctic-final-url": response.url || target,
       "x-palladium-final-url": response.url || target
     };
     sendBinary(res, response.status, body, headers, config);
@@ -1350,544 +1123,7 @@ async function routeRequest(req, res, config) {
     return;
   }
 
-  if (url.pathname === "/games" || url.pathname.startsWith("/games/")) {
-    const pathDecoded = decodeURIComponent(url.pathname);
-    const withoutPrefix = pathDecoded.slice("/games".length).replace(/^\/+/, "") || ".";
-    const resolved = path.resolve(config.gamesDir, withoutPrefix);
-    if (method === "GET" && isPathInside(config.gamesDir, resolved)) {
-      let targetPath = resolved;
-      try {
-        const st = await fsp.stat(resolved);
-        if (st.isDirectory()) targetPath = path.join(resolved, "index.html");
-        if (st.isFile() || (await fsp.stat(targetPath))) {
-          if (path.extname(targetPath).toLowerCase() === ".html") {
-            await serveGameHtmlWithSaveBridge(req, res, config, targetPath, { allowEmbedding: true });
-            return;
-          }
-        }
-      } catch (_) {}
-    }
-    await serveMountedStatic(req, res, config, url.pathname, method, "/games", config.gamesDir, { allowEmbedding: true });
-    return;
-  }
-
-  if (url.pathname === "/swf" || url.pathname.startsWith("/swf/")) {
-    await serveMountedStatic(req, res, config, url.pathname, method, "/swf", config.swfDir, { allowEmbedding: true });
-    return;
-  }
-
-  if (url.pathname === "/images/game-img" || url.pathname.startsWith("/images/game-img/")) {
-    await serveMountedStatic(req, res, config, url.pathname, method, "/images/game-img", config.gameImageDir);
-    return;
-  }
-
-  await serveStatic(req, res, config, url.pathname, method);
-}
-
-async function loadGamesCatalog(config) {
-  const files = await walkFiles(config.gamesDir);
-  const overrides = await readGameCatalogOverrides(config.gameCatalogPath);
-  const entries = [];
-
-  for (const absPath of files) {
-    if (!absPath.endsWith(".html")) continue;
-
-    const relativeGamePath = normalizeSlash(path.relative(config.gamesDir, absPath));
-    if (!relativeGamePath || relativeGamePath.startsWith("../")) continue;
-
-    const gamePath = `games/${relativeGamePath}`;
-    const override = overrides[gamePath] || null;
-    const extracted = await extractGameMetadata(absPath);
-    const title =
-      safeText(override?.title, 160) ||
-      safeText(extracted.title, 160) ||
-      humanizeFilename(path.basename(relativeGamePath, ".html"));
-    const author =
-      safeText(override?.author, 120) ||
-      safeText(extracted.author, 120) ||
-      "Unknown";
-    const image =
-      safeImagePath(override?.image) ||
-      safeImagePath(extracted.image) ||
-      inferGameImagePath(relativeGamePath, config);
-    const category =
-      safeText(override?.category, 80) ||
-      safeText(extracted.category, 80) ||
-      inferCategory(gamePath);
-
-    entries.push({
-      file: path.basename(relativeGamePath),
-      title,
-      author,
-      category,
-      path: gamePath,
-      image,
-      playerPath: buildPlayerPath(gamePath, title, author)
-    });
-  }
-
-  entries.sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
-  return entries;
-}
-
-async function readGameCatalogOverrides(catalogPath) {
-  if (!catalogPath || !fs.existsSync(catalogPath)) {
-    return {};
-  }
-
-  try {
-    const raw = await fsp.readFile(catalogPath, "utf8");
-    const parsed = parseJsonObject(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (error) {
-    console.warn(`Failed to read game catalog overrides from ${catalogPath}:`, error);
-    return {};
-  }
-}
-
-async function extractGameMetadata(absPath) {
-  try {
-    const source = await fsp.readFile(absPath, "utf8");
-    const title =
-      decodeHtmlEntities(findMetaContent(source, "og:title")) ||
-      decodeHtmlEntities(findTagText(source, "title")) ||
-      "";
-    const author =
-      decodeHtmlEntities(findMetaNameContent(source, "author")) ||
-      decodeHtmlEntities(findMetaContent(source, "author")) ||
-      "";
-
-    return {
-      title: cleanGameTitle(title),
-      author: cleanAuthorName(author),
-      image: decodeHtmlEntities(findMetaContent(source, "og:image")) || "",
-      category: ""
-    };
-  } catch {
-    return {
-      title: "",
-      author: "",
-      image: "",
-      category: ""
-    };
-  }
-}
-
-async function getTrendingGames(config, limit) {
-  await ensurePlayStatsLoaded(config);
-
-  const tracked = [...playStatsState.entries.values()]
-    .filter((entry) => Number(entry.count) > 0)
-    .sort((a, b) => {
-      if (Number(b.count) !== Number(a.count)) return Number(b.count) - Number(a.count);
-      const bTime = Date.parse(String(b.lastPlayedAt || "")) || 0;
-      const aTime = Date.parse(String(a.lastPlayedAt || "")) || 0;
-      if (bTime !== aTime) return bTime - aTime;
-      return String(a.title || "").localeCompare(String(b.title || ""));
-    });
-
-  const totalPlays = tracked.reduce((sum, entry) => sum + Math.max(0, Number(entry.count) || 0), 0);
-  const picked = tracked.slice(0, Math.max(1, Number(limit) || 8));
-
-  if (picked.length === 0) {
-    return {
-      games: [],
-      trackedGames: 0,
-      totalPlays: 0,
-      updatedAt: playStatsState.lastSavedAt || ""
-    };
-  }
-
-  const catalog = await loadGamesCatalog(config);
-  const byPath = new Map(catalog.map((entry) => [normalizePlayPath(entry.path), entry]));
-
-  const games = picked.map((entry) => {
-    const fromCatalog = byPath.get(normalizePlayPath(entry.path));
-    const pathValue = normalizePlayPath(entry.path);
-    const title = safeText(entry.title, 160) || safeText(fromCatalog?.title, 160) || humanizeFilename(path.basename(pathValue, ".html"));
-    const author = safeText(entry.author, 120) || safeText(fromCatalog?.author, 120) || "Unknown";
-    const image = safeImagePath(entry.image) || safeImagePath(fromCatalog?.image) || "";
-    const category = safeText(entry.category, 80) || safeText(fromCatalog?.category, 80) || inferCategory(pathValue);
-    const playerPath =
-      safePlayerPath(entry.playerPath) ||
-      safePlayerPath(fromCatalog?.playerPath) ||
-      buildPlayerPath(pathValue, title, author);
-
-    return {
-      path: pathValue,
-      title,
-      author,
-      category,
-      image,
-      playerPath,
-      count: Math.max(0, Number(entry.count) || 0),
-      lastPlayedAt: String(entry.lastPlayedAt || ""),
-      firstPlayedAt: String(entry.firstPlayedAt || "")
-    };
-  });
-
-  return {
-    games,
-    trackedGames: tracked.length,
-    totalPlays,
-    updatedAt: playStatsState.lastSavedAt || ""
-  };
-}
-
-async function recordGamePlay(config, payload) {
-  await ensurePlayStatsLoaded(config);
-
-  const key = normalizePlayPath(payload.path);
-  if (!key) {
-    throw new Error("Invalid game path.");
-  }
-
-  const nowIso = new Date().toISOString();
-  const existing = playStatsState.entries.get(key);
-  const base = existing || {
-    path: key,
-    title: safeText(payload.title, 160) || humanizeFilename(path.basename(key, ".html")),
-    author: safeText(payload.author, 120) || "Unknown",
-    category: safeText(payload.category, 80) || inferCategory(key),
-    image: safeImagePath(payload.image) || "",
-    playerPath: safePlayerPath(payload.playerPath) || buildPlayerPath(key, payload.title, payload.author),
-    count: 0,
-    firstPlayedAt: nowIso,
-    lastPlayedAt: nowIso
-  };
-
-  base.title = safeText(payload.title, 160) || base.title || humanizeFilename(path.basename(key, ".html"));
-  base.author = safeText(payload.author, 120) || base.author || "Unknown";
-  base.category = safeText(payload.category, 80) || base.category || inferCategory(key);
-
-  const image = safeImagePath(payload.image);
-  if (image) {
-    base.image = image;
-  }
-
-  const playerPath = safePlayerPath(payload.playerPath);
-  if (playerPath) {
-    base.playerPath = playerPath;
-  } else if (!base.playerPath) {
-    base.playerPath = buildPlayerPath(key, base.title, base.author);
-  }
-
-  base.count = Math.max(0, Number(base.count) || 0) + 1;
-  if (!base.firstPlayedAt) {
-    base.firstPlayedAt = nowIso;
-  }
-  base.lastPlayedAt = nowIso;
-
-  playStatsState.entries.set(key, base);
-  schedulePlayStatsFlush(config);
-  return base;
-}
-
-async function ensurePlayStatsLoaded(config) {
-  if (playStatsState.loaded) return;
-  playStatsState.loaded = true;
-
-  await ensureDir(path.dirname(config.playStatsPath));
-  if (!fs.existsSync(config.playStatsPath)) {
-    playStatsState.entries.clear();
-    return;
-  }
-
-  try {
-    const raw = await fsp.readFile(config.playStatsPath, "utf8");
-    const parsed = parseJsonObject(raw);
-    const items = Array.isArray(parsed?.entries) ? parsed.entries : [];
-
-    playStatsState.entries.clear();
-    for (const item of items) {
-      if (!item || typeof item !== "object") continue;
-      const pathValue = normalizePlayPath(item.path);
-      if (!pathValue) continue;
-      const count = Math.max(0, Number(item.count) || 0);
-      if (count <= 0) continue;
-
-      playStatsState.entries.set(pathValue, {
-        path: pathValue,
-        title: safeText(item.title, 160) || humanizeFilename(path.basename(pathValue, ".html")),
-        author: safeText(item.author, 120) || "Unknown",
-        category: safeText(item.category, 80) || inferCategory(pathValue),
-        image: safeImagePath(item.image) || "",
-        playerPath: safePlayerPath(item.playerPath) || buildPlayerPath(pathValue, item.title, item.author),
-        count,
-        firstPlayedAt: safeText(item.firstPlayedAt, 64) || "",
-        lastPlayedAt: safeText(item.lastPlayedAt, 64) || ""
-      });
-    }
-
-    playStatsState.lastSavedAt = safeText(parsed?.savedAt, 64) || "";
-  } catch (error) {
-    console.warn(`Failed to load play stats from ${config.playStatsPath}:`, error);
-    playStatsState.entries.clear();
-  }
-}
-
-function schedulePlayStatsFlush(config) {
-  if (playStatsState.flushTimer) return;
-  playStatsState.flushTimer = setTimeout(() => {
-    playStatsState.flushTimer = null;
-    playStatsState.flushInFlight = playStatsState.flushInFlight
-      .then(() => persistPlayStats(config))
-      .catch((error) => {
-        console.warn("Failed to persist play stats:", error);
-      });
-  }, 700);
-}
-
-async function flushPlayStatsNow(config) {
-  if (!playStatsState.loaded) return;
-  if (playStatsState.flushTimer) {
-    clearTimeout(playStatsState.flushTimer);
-    playStatsState.flushTimer = null;
-  }
-  playStatsState.flushInFlight = playStatsState.flushInFlight
-    .then(() => persistPlayStats(config))
-    .catch((error) => {
-      console.warn("Failed to persist play stats:", error);
-    });
-  await playStatsState.flushInFlight;
-}
-
-async function persistPlayStats(config) {
-  await ensureDir(path.dirname(config.playStatsPath));
-
-  const ordered = [...playStatsState.entries.values()].sort((a, b) =>
-    String(a.path || "").localeCompare(String(b.path || ""))
-  );
-  const payload = {
-    version: 1,
-    savedAt: new Date().toISOString(),
-    entries: ordered.map((entry) => ({
-      path: normalizePlayPath(entry.path),
-      title: safeText(entry.title, 160) || "",
-      author: safeText(entry.author, 120) || "",
-      category: safeText(entry.category, 80) || "",
-      image: safeImagePath(entry.image) || "",
-      playerPath: safePlayerPath(entry.playerPath) || "",
-      count: Math.max(0, Number(entry.count) || 0),
-      firstPlayedAt: safeText(entry.firstPlayedAt, 64) || "",
-      lastPlayedAt: safeText(entry.lastPlayedAt, 64) || ""
-    }))
-  };
-
-  const tempPath = `${config.playStatsPath}.tmp`;
-  await fsp.writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-  await fsp.rename(tempPath, config.playStatsPath);
-  playStatsState.lastSavedAt = payload.savedAt;
-}
-
-function normalizePlayPayload(payload) {
-  if (!payload || typeof payload !== "object") return null;
-
-  const pathValue = normalizePlayPath(payload.path || payload.gamePath || payload.game);
-  if (!pathValue) return null;
-
-  const title = safeText(payload.title, 160) || humanizeFilename(path.basename(pathValue, ".html"));
-  const author = safeText(payload.author, 120) || "Unknown";
-
-  return {
-    path: pathValue,
-    title,
-    author,
-    category: safeText(payload.category, 80) || inferCategory(pathValue),
-    image: safeImagePath(payload.image) || "",
-    playerPath: safePlayerPath(payload.playerPath) || buildPlayerPath(pathValue, title, author)
-  };
-}
-
-function normalizePlayPath(value) {
-  const normalized = normalizeSlash(value).trim().replace(/^\/+/, "");
-  if (!normalized) return "";
-  if (normalized.length > 320) return "";
-  if (normalized.includes("\0") || normalized.includes("..")) return "";
-  if (!normalized.toLowerCase().startsWith("games/")) return "";
-  return normalized;
-}
-
-function safeText(value, maxLength) {
-  const text = String(value || "").trim();
-  if (!text) return "";
-  return text.slice(0, Math.max(1, maxLength || 200));
-}
-
-function safeImagePath(value) {
-  const text = safeText(value, 520);
-  if (!text) return "";
-  if (/^https?:\/\//i.test(text)) {
-    return normalizeUserUrl(text) || "";
-  }
-  if (text.startsWith("/images/")) return text;
-  if (text.startsWith("images/")) return `/${text}`;
-  if (text.startsWith("./images/")) return `/${text.slice(2)}`;
-  return "";
-}
-
-function safePlayerPath(value) {
-  const text = safeText(value, 700);
-  if (!text) return "";
-  if (text.includes("\0") || text.includes("..")) return "";
-
-  if (/^https?:\/\//i.test(text)) {
-    try {
-      const parsed = new URL(text);
-      if (/^https?:$/i.test(parsed.protocol)) {
-        return parsed.pathname.replace(/^\/+/, "") + parsed.search;
-      }
-    } catch {
-      return "";
-    }
-  }
-
-  if (/^\/?game-player\.html\?/i.test(text)) {
-    return text.replace(/^\/+/, "");
-  }
-
-  return "";
-}
-
-function buildPlayerPath(gamePath, title, author) {
-  const safePath = normalizePlayPath(gamePath);
-  if (!safePath) return "game-player.html";
-  return (
-    `game-player.html?game=${encodeURIComponent(safePath)}` +
-    `&title=${encodeURIComponent(safeText(title, 160) || humanizeFilename(path.basename(safePath, ".html")))}` +
-    `&author=${encodeURIComponent(safeText(author, 120) || "Unknown")}`
-  );
-}
-
-function countCategories(entries) {
-  const map = new Map();
-  for (const entry of entries) {
-    const key = String(entry.category || "other").toLowerCase();
-    map.set(key, (map.get(key) || 0) + 1);
-  }
-  return [...map.entries()].map(([id, count]) => ({ id, count }));
-}
-
-function inferCategory(gamePath) {
-  const normalized = normalizeSlash(gamePath);
-  const parts = normalized.split("/").filter(Boolean);
-  if (parts.length >= 2 && parts[0].toLowerCase() === "games") {
-    return parts[1];
-  }
-  return "other";
-}
-
-function humanizeFilename(name) {
-  return String(name || "")
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function inferGameImagePath(relativeGamePath, config) {
-  const normalized = normalizeSlash(relativeGamePath).replace(/^\/+/, "");
-  if (!normalized) return "";
-
-  const basename = path.basename(normalized, path.extname(normalized)).toLowerCase();
-  const candidates = [
-    basename,
-    basename.replace(/[^a-z0-9]+/g, "-"),
-    basename.replace(/[^a-z0-9]+/g, ""),
-    normalized
-      .replace(/^games\//i, "")
-      .replace(/\.[^.]+$/, "")
-      .split("/")
-      .pop()
-  ]
-    .filter(Boolean)
-    .map((value) => String(value).toLowerCase());
-
-  const imageDir = config?.gameImageDir || path.join(ROOT_DIR, "images", "game-img");
-  const extensions = [".png", ".jpg", ".jpeg", ".webp", ".gif"];
-
-  for (const candidate of candidates) {
-    for (const extension of extensions) {
-      const imagePath = path.join(imageDir, `${candidate}${extension}`);
-      if (fs.existsSync(imagePath)) {
-        return `/images/game-img/${candidate}${extension}`;
-      }
-    }
-  }
-
-  return "";
-}
-
-function findTagText(source, tagName) {
-  const pattern = new RegExp(`<${tagName}[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
-  const match = String(source || "").match(pattern);
-  return match ? match[1].trim() : "";
-}
-
-function findMetaNameContent(source, name) {
-  const pattern = new RegExp(
-    `<meta[^>]+name=["']${escapeRegExp(name)}["'][^>]+content=["']([^"']+)["'][^>]*>`,
-    "i"
-  );
-  const reversePattern = new RegExp(
-    `<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escapeRegExp(name)}["'][^>]*>`,
-    "i"
-  );
-  const text = String(source || "");
-  const match = text.match(pattern) || text.match(reversePattern);
-  return match ? match[1].trim() : "";
-}
-
-function findMetaContent(source, propertyName) {
-  const escaped = escapeRegExp(propertyName);
-  const patterns = [
-    new RegExp(`<meta[^>]+property=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, "i"),
-    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+property=["']${escaped}["'][^>]*>`, "i"),
-    new RegExp(`<meta[^>]+name=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`, "i"),
-    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+name=["']${escaped}["'][^>]*>`, "i")
-  ];
-  const text = String(source || "");
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) {
-      return match[1].trim();
-    }
-  }
-  return "";
-}
-
-function cleanGameTitle(value) {
-  const text = safeText(value, 160);
-  if (!text) return "";
-
-  return text
-    .replace(/\s+\|\s+Official Site$/i, "")
-    .replace(/\s+-\s+Poki$/i, "")
-    .replace(/\s+-\s+CrazyGames$/i, "")
-    .replace(/\s+-\s+Game$/i, "")
-    .trim();
-}
-
-function cleanAuthorName(value) {
-  const text = safeText(value, 120);
-  if (!text) return "";
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function decodeHtmlEntities(value) {
-  return String(value || "")
-    .replace(/&amp;/g, "&")
-    .replace(/&apos;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#x2F;/gi, "/")
-    .trim();
-}
-
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  sendText(res, 404, "Not found", config);
 }
 
 function isTextLikeContentType(contentType) {
@@ -2115,242 +1351,6 @@ async function runLinkCheck(targetUrl, timeoutMs) {
   };
 
   return output;
-}
-
-async function serveStatic(req, res, config, pathname, method) {
-  if (method !== "GET" && method !== "HEAD") {
-    sendText(res, 405, "Method not allowed", config);
-    return;
-  }
-
-  if (!config.frontendDir) {
-    sendText(res, 404, "Frontend not configured on this backend instance.", config);
-    return;
-  }
-
-  let cleaned = "";
-  try {
-    cleaned = decodeURIComponent(pathname);
-  } catch {
-    sendText(res, 400, "Bad request", config);
-    return;
-  }
-  const relativePath = cleaned === "/" ? "index.html" : cleaned.replace(/^\/+/, "");
-  if (isBlockedStaticPath(relativePath)) {
-    sendText(res, 404, "Not found", config);
-    return;
-  }
-  const absolutePath = path.resolve(config.frontendDir, relativePath);
-
-  if (!isPathInside(config.frontendDir, absolutePath)) {
-    sendText(res, 403, "Forbidden", config);
-    return;
-  }
-
-  await sendResolvedFile(res, config, absolutePath, method);
-}
-
-async function serveMountedStatic(req, res, config, pathname, method, mountPrefix, rootDir, headerOptions = {}) {
-  if (method !== "GET" && method !== "HEAD") {
-    sendText(res, 405, "Method not allowed", config);
-    return;
-  }
-
-  let cleaned = "";
-  try {
-    cleaned = decodeURIComponent(pathname);
-  } catch {
-    sendText(res, 400, "Bad request", config);
-    return;
-  }
-
-  const withoutPrefix = cleaned.slice(mountPrefix.length).replace(/^\/+/, "");
-  const absolutePath = path.resolve(rootDir, withoutPrefix || ".");
-
-  if (!isPathInside(rootDir, absolutePath)) {
-    sendText(res, 403, "Forbidden", config);
-    return;
-  }
-
-  await sendResolvedFile(res, config, absolutePath, method, headerOptions);
-}
-
-const GAME_SAVE_BRIDGE_SCRIPT = `
-(function(){
-  var store = {};
-  var syncTimeout;
-  var proxyInstalled = false;
-  function snapshot() {
-    var out = {};
-    for (var k in store) if (Object.prototype.hasOwnProperty.call(store, k)) out[k] = store[k];
-    return out;
-  }
-  function sendSync() {
-    if (!proxyInstalled) return;
-    if (syncTimeout) clearTimeout(syncTimeout);
-    syncTimeout = setTimeout(function() {
-      syncTimeout = null;
-      try { window.opener && window.opener.postMessage({ type: 'palladium-save-sync', data: snapshot() }, '*'); } catch (e) {}
-      try { window.parent && window.parent !== window && window.parent.postMessage({ type: 'palladium-save-sync', data: snapshot() }, '*'); } catch (e) {}
-    }, 150);
-  }
-  function installProxy() {
-    if (proxyInstalled) return;
-    proxyInstalled = true;
-    try {
-      var wrap = {
-        getItem: function(key) { return store.hasOwnProperty(key) ? store[key] : null; },
-        setItem: function(key, val) { store[String(key)] = String(val); sendSync(); },
-        removeItem: function(key) { delete store[key]; sendSync(); },
-        clear: function() { store = {}; sendSync(); },
-        key: function(i) { var keys = Object.keys(store); return keys[i] || null; }
-      };
-      Object.defineProperty(wrap, 'length', { get: function() { return Object.keys(store).length; }, configurable: true, enumerable: false });
-      Object.defineProperty(window, 'localStorage', { value: wrap, configurable: true, writable: true });
-    } catch (e) {
-      var real = window.localStorage;
-      if (real && typeof real.setItem === 'function') {
-        real.getItem = function(key) { return store.hasOwnProperty(key) ? store[key] : null; };
-        real.setItem = function(key, val) { store[String(key)] = String(val); sendSync(); };
-        real.removeItem = function(key) { delete store[key]; sendSync(); };
-        real.clear = function() { store = {}; sendSync(); };
-        real.key = function(i) { return Object.keys(store)[i] || null; };
-      }
-    }
-  }
-  window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'palladium-save-load' && e.data.data && typeof e.data.data === 'object') {
-      for (var k in store) delete store[k];
-      for (var k in e.data.data) if (Object.prototype.hasOwnProperty.call(e.data.data, k)) store[k] = e.data.data[k];
-    }
-  });
-  installProxy();
-  function sendReady() {
-    try {
-      if (window.opener) window.opener.postMessage({ type: 'palladium-save-ready' }, '*');
-      if (window.parent && window.parent !== window) window.parent.postMessage({ type: 'palladium-save-ready' }, '*');
-    } catch (err) {}
-  }
-  sendReady();
-  setTimeout(sendReady, 50);
-  setTimeout(sendReady, 150);
-  setTimeout(sendReady, 400);
-})();
-`;
-
-async function serveGameHtmlWithSaveBridge(req, res, config, filePath, headerOptions = {}) {
-  let html;
-  try {
-    html = await fsp.readFile(filePath, "utf8");
-  } catch {
-    sendText(res, 404, "Not found", config);
-    return;
-  }
-  const inject = "<script>" + GAME_SAVE_BRIDGE_SCRIPT + "</script>";
-  const injected = inject + html;
-  const buf = Buffer.from(injected, "utf8");
-  addCors(res, config);
-  addSecurityHeaders(res, headerOptions);
-  res.writeHead(200, {
-    "content-type": "text/html; charset=utf-8",
-    "content-length": String(buf.length)
-  });
-  res.end(buf);
-}
-
-async function sendResolvedFile(res, config, absolutePath, method, headerOptions = {}) {
-  let stat;
-  try {
-    stat = await fsp.stat(absolutePath);
-  } catch {
-    sendText(res, 404, "Not found", config);
-    return;
-  }
-
-  let filePath = absolutePath;
-  if (stat.isDirectory()) {
-    filePath = path.join(absolutePath, "index.html");
-    try {
-      stat = await fsp.stat(filePath);
-    } catch {
-      sendText(res, 404, "Not found", config);
-      return;
-    }
-  }
-
-  if (!stat.isFile()) {
-    sendText(res, 404, "Not found", config);
-    return;
-  }
-
-  const ext = path.extname(filePath).toLowerCase();
-  const contentType = MIME_TYPES[ext] || "application/octet-stream";
-
-  if (method === "HEAD") {
-    sendHead(res, 200, {
-      "content-type": contentType,
-      "content-length": String(stat.size)
-    }, config, headerOptions);
-    return;
-  }
-
-  addCors(res, config);
-  addSecurityHeaders(res, headerOptions);
-  res.writeHead(200, {
-    "content-type": contentType,
-    "content-length": String(stat.size)
-  });
-
-  const stream = fs.createReadStream(filePath);
-  stream.on("error", () => {
-    if (!res.headersSent) {
-      sendText(res, 500, "Failed to read file", config);
-    } else {
-      res.destroy();
-    }
-  });
-  stream.pipe(res);
-}
-
-function isBlockedStaticPath(relativePath) {
-  const normalized = normalizeSlash(relativePath).replace(/^\/+/, "").toLowerCase();
-  if (!normalized) return true;
-
-  const segments = normalized.split("/").filter(Boolean);
-  if (segments.length === 0) return true;
-  if (segments.some((segment) => segment === "." || segment === "..")) return true;
-  if (segments.some((segment) => segment.startsWith("."))) return true;
-  if (STATIC_BLOCKED_ROOTS.has(segments[0])) return true;
-  if (segments.length === 1 && STATIC_BLOCKED_TOP_LEVEL_FILES.has(segments[0])) return true;
-  return false;
-}
-
-function isPathInside(baseDir, candidatePath) {
-  const relative = path.relative(baseDir, candidatePath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-async function walkFiles(root) {
-  const out = [];
-
-  async function visit(dir) {
-    const entries = await fsp.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(full);
-      } else if (entry.isFile()) {
-        out.push(full);
-      }
-    }
-  }
-
-  await visit(root);
-  return out;
-}
-
-function normalizeSlash(value) {
-  return String(value || "").replace(/\\/g, "/");
 }
 
 function normalizeUrl(value) {
@@ -2960,6 +1960,7 @@ function sendHeadFromUpstream(res, response, config) {
   addSecurityHeaders(res);
   const headers = {
     "content-type": response.headers.get("content-type") || "application/octet-stream",
+    "x-antarctic-final-url": response.url || "",
     "x-palladium-final-url": response.url || ""
   };
   res.writeHead(response.status, headers);
@@ -3009,14 +2010,6 @@ async function shutdown(exitCode) {
   }
   managed.shuttingDown = true;
   await stopAutoPullLoop();
-
-  if (managed.runtime.config) {
-    try {
-      await flushPlayStatsNow(managed.runtime.config);
-    } catch (error) {
-      console.warn("Failed to flush play stats during shutdown:", error);
-    }
-  }
 
   if (managed.httpServer) {
     await new Promise((resolve) => managed.httpServer.close(resolve));

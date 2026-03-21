@@ -5,13 +5,12 @@ const os = require("node:os");
 const path = require("node:path");
 const net = require("node:net");
 const { spawn } = require("node:child_process");
-const WebSocket = require("ws");
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
 
-test("backend exposes Scramjet proxy metadata and accepts Wisp upgrades", async (t) => {
+test("backend only exposes the trimmed Discord, AI, proxy, and link-check surface", async (t) => {
   const port = await getOpenPort();
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "antarctic-proxy-config-"));
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "antarctic-backend-surface-"));
   const configPath = path.join(tempDir, "palladium.env");
 
   await fsp.writeFile(
@@ -53,35 +52,35 @@ test("backend exposes Scramjet proxy metadata and accepts Wisp upgrades", async 
   const backendBase = `http://127.0.0.1:${port}`;
   await waitForServer(`${backendBase}/health`, output);
 
-  const proxyHealthResponse = await fetch(`${backendBase}/api/proxy/health`);
-  assert.equal(proxyHealthResponse.status, 200);
+  const healthResponse = await fetch(`${backendBase}/health`);
+  assert.equal(healthResponse.status, 200);
 
-  const proxyHealth = await proxyHealthResponse.json();
-  assert.equal(proxyHealth.ok, true);
-  assert.equal(proxyHealth.service, "scramjet");
-  assert.equal(proxyHealth.transport, "wisp");
-  assert.equal(proxyHealth.websocketPath, "/wisp/");
-  assert.equal(proxyHealth.websocketUrl, `ws://127.0.0.1:${port}/wisp/`);
+  const health = await healthResponse.json();
+  assert.equal(health.ok, true);
+  assert.equal(health.service, "antarctic-backend");
+  assert.deepEqual(health.features, [
+    "api/proxy/fetch",
+    "wisp",
+    "api/ai/chat",
+    "api/discord/widget",
+    "link-check"
+  ]);
 
-  const configResponse = await fetch(`${backendBase}/api/config/public`);
-  assert.equal(configResponse.status, 200);
+  const legacyRoutes = [
+    "/",
+    "/api/games",
+    "/api/games/trending",
+    "/api/games/play",
+    "/api/categories",
+    "/games/bullet-hell/brotato.html",
+    "/swf/chibi-knight.swf",
+    "/images/game-img/brotato.jpeg"
+  ];
 
-  const payload = await configResponse.json();
-  assert.equal(payload.ok, true);
-  assert.equal(payload.backendBase, backendBase);
-  assert.equal(payload.services.proxyMode, "scramjet");
-  assert.equal(payload.services.proxyTransport, "wisp");
-  assert.equal(payload.services.wispPath, "/wisp/");
-  assert.equal(payload.services.wispUrl, `ws://127.0.0.1:${port}/wisp/`);
-  assert.equal(payload.services.aiChat, "/api/ai/chat");
-  assert.equal(payload.services.defaultAiModel, "qwen3.5:0.8b");
-  assert.ok(!("assetBase" in payload.services));
-  assert.ok(!("gamesBase" in payload.services));
-  assert.ok(!("monochromeBase" in payload.services));
-  assert.equal(payload.discord.inviteUrl, "https://discord.gg/FNACSCcE26");
-  assert.equal(payload.discord.widgetUrl, "https://discord.com/api/guilds/1479914434460913707/widget.json");
-
-  await expectWebSocketOpen(`ws://127.0.0.1:${port}/wisp/`);
+  for (const route of legacyRoutes) {
+    const response = await fetch(`${backendBase}${route}`);
+    assert.equal(response.status, 404, `Expected ${route} to stay removed`);
+  }
 });
 
 async function getOpenPort() {
@@ -116,27 +115,6 @@ async function waitForServer(url, output) {
   }
 
   throw new Error(`Backend server did not start in time.\n${output.join("")}`);
-}
-
-async function expectWebSocketOpen(url) {
-  await new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const timer = setTimeout(() => {
-      socket.terminate();
-      reject(new Error(`Timed out waiting for websocket open on ${url}`));
-    }, 5_000);
-
-    socket.once("open", () => {
-      clearTimeout(timer);
-      socket.close();
-      resolve();
-    });
-
-    socket.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-  });
 }
 
 async function waitForExit(child, timeoutMs) {

@@ -72,6 +72,9 @@ const DEFAULT_APPS_BASES = [
 
 function resolveAppsBases() {
   const candidates = [
+    process.env.ANTARCTIC_APPS_URL,
+    process.env.ANTARCTIC_BACKEND_BASE,
+    process.env.ANTARCTIC_PUBLIC_BASE,
     process.env.PALLADIUM_APPS_URL,
     process.env.PALLADIUM_BACKEND_BASE,
     process.env.BACKEND_BASE_URL,
@@ -1054,7 +1057,7 @@ async function mainLoop() {
 
   await ensureSlashCommands();
   console.log(`Palladium link command bot running for channels: ${CHANNEL_IDS.join(", ")}`);
-  console.log(`Palladium link checker backends: ${APPS_BASES.join(", ")}`);
+  console.log(`Antarctic link checker backends: ${APPS_BASES.join(", ")}`);
   console.log(
     LEGACY_POLLING_ENABLED
       ? `Legacy /link message polling enabled (${POLL_MS}ms interval).`
@@ -1124,6 +1127,7 @@ module.exports = {
   normalizeSavedLinkEntry,
   normalizeUrl,
   pickSavedLink,
+  resolveAppsBases,
   sanitizeSavedLinks,
   upsertSavedLink,
 };

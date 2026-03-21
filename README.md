@@ -1,54 +1,49 @@
-# Palladium Backend
+# Antarctic Backend
 
-This folder is the backend runtime for Palladium Games.
+This folder is the live backend runtime for Antarctic Games.
 
-What it runs:
+What it owns:
 
 - `apps.js` in this folder
-- AI APIs
-- hosted game files
-- hosted game thumbnails from `backend/images/game-img`
-- proxy endpoints and the Scramjet Wisp websocket transport
-- Monochrome endpoint configuration
-- Discord bot sidecars
+- Discord bot sidecars and Discord-facing APIs
+- AI chat APIs backed by Ollama
+- Scramjet proxy APIs plus the Wisp websocket transport
+- link-check analysis used by the Discord tooling
+- proxy-runtime sync tooling for the separate static frontend
 
-Discord link bot commands:
+What it no longer owns:
 
-- `/link <url>` checks a URL with the existing blocker-analysis flow
-- `/addlink <url>` lets admins save a reusable link into the shared pool
-- `/getlink` gives members one random saved link from that pool
-
-Saved links live in the link bot state file and persist across restarts.
+- frontend HTML/CSS/JS hosting
+- hosted games
+- hosted SWF launchers
+- backend-hosted game thumbnails
+- Monochrome service files
 
 Run locally:
 
 ```bash
-cd backend
+cd palladium-backend
 ./start.sh
 ```
 
 Production target:
 
 - point `api.sethpang.com` at this backend
-- keep `backend/config/palladium.env` on the server
-- host the `../frontend/` folder separately on a static platform if you want the UI split
+- keep `config/palladium.env` on the server
+- host the frontend from a static platform separately
 
-Notes:
+Important routes:
 
-- `FRONTEND_DIR` is optional
-- set `FRONTEND_DIR=disabled` to force backend-only mode
-- if no frontend directory exists, the backend still boots and serves `/api/*`, `/games/*`, `/swf/*`, and `/images/game-img/*`
-- only direct static page routes like `/` are disabled in backend-only mode
+- `GET /health`
+- `GET /api/config/public`
+- `GET /api/proxy/health`
+- `GET /api/proxy/fetch?url=...`
+- `POST /api/ai/chat`
+- `GET /api/discord/widget`
+- `GET /link-check?url=...`
+- websocket upgrades on `/wisp/`
 
-Important:
+Docs:
 
-- the backend remains the source of truth for `/api/*`, `/games/*`, `/health`, and `/link-check`
-- the static frontend should not contain secrets, Discord tokens, or service runtime code
-
-Scramjet split:
-
-- keep the frontend static and serve it from a static host
-- keep the live proxy transport on this backend at `/wisp/`
-- let the frontend read `/api/config/public` and `/api/proxy/health`
-- point production traffic at `https://api.sethpang.com`
-- sync the committed frontend proxy runtime from here with `npm run sync:frontend-proxy`
+- user guide: [docs/user-guide.md](docs/user-guide.md)
+- agent guide: [docs/agent-guide.md](docs/agent-guide.md)
