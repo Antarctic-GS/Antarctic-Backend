@@ -96,6 +96,7 @@ class AntarcticCommunityStore {
     this.now = now;
     this.SQL = null;
     this.db = null;
+    this.flushTimer = null;
     this.writeChain = Promise.resolve();
   }
 
@@ -153,7 +154,7 @@ class AntarcticCommunityStore {
     const user = this.findUserByUsername(normalizedUsername);
     this.ensureLobbyMembership(Number(user.id));
     const session = this.createSessionForUser(Number(user.id));
-    await this.flush();
+    this.queueFlush();
     return {
       token: session.token,
       user: toPublicUser(user)
@@ -185,7 +186,7 @@ class AntarcticCommunityStore {
     this.cleanupExpiredSessions();
     this.ensureLobbyMembership(Number(user.id));
     const session = this.createSessionForUser(Number(user.id));
-    await this.flush();
+    this.queueFlush();
     return {
       token: session.token,
       user: toPublicUser(user)
@@ -202,7 +203,7 @@ class AntarcticCommunityStore {
     const normalized = cleanText(token);
     if (!normalized) return;
     this.run("DELETE FROM sessions WHERE token = ?", [normalized]);
-    await this.flush();
+    this.queueFlush();
   }
 
   /**
@@ -227,13 +228,13 @@ class AntarcticCommunityStore {
     );
 
     if (!row) {
-      await this.flush();
+      this.queueFlush();
       return null;
     }
 
     const changed = this.ensureLobbyMembership(Number(row.id));
     if (changed) {
-      await this.flush();
+      this.queueFlush();
     }
     return {
       token: normalized,
@@ -324,6 +325,32 @@ class AntarcticCommunityStore {
   }
 
   /**
+   * Returns the logged-in community dashboard payload in one call.
+   *
+   * @param {number} userId - Authenticated user id.
+   * @returns {{ threads: object[], rooms: object[], saves: object[], stats: { threadCount: number, roomCount: number, joinedRoomCount: number, directCount: number, saveCount: number } }} Snapshot payload.
+   */
+  getCommunitySnapshot(userId) {
+    const catalog = this.listThreadsForUser(Number(userId));
+    const saves = this.listGameSaves(Number(userId));
+    const threads = Array.isArray(catalog.threads) ? catalog.threads : [];
+    const rooms = Array.isArray(catalog.rooms) ? catalog.rooms : [];
+
+    return {
+      threads,
+      rooms,
+      saves,
+      stats: {
+        threadCount: threads.length,
+        roomCount: rooms.length,
+        joinedRoomCount: rooms.filter((room) => room && room.joined).length,
+        directCount: threads.filter((thread) => thread && thread.type === "direct").length,
+        saveCount: saves.length
+      }
+    };
+  }
+
+  /**
    * Creates a new public chat room and joins the creator automatically.
    *
    * @param {number} userId - Creating user id.
@@ -342,7 +369,7 @@ class AntarcticCommunityStore {
     );
     const threadId = Number(this.get("SELECT last_insert_rowid() AS id").id);
     this.ensureThreadParticipant(threadId, Number(userId));
-    await this.flush();
+    this.queueFlush();
     return this.getThreadForUser(Number(userId), threadId);
   }
 
@@ -361,7 +388,7 @@ class AntarcticCommunityStore {
 
     this.ensureThreadParticipant(Number(threadId), Number(userId));
     this.run("UPDATE threads SET updated_at = ? WHERE id = ?", [this.nowIso(), Number(threadId)]);
-    await this.flush();
+    this.queueFlush();
     return this.getThreadForUser(Number(userId), Number(threadId));
   }
 
@@ -396,7 +423,7 @@ class AntarcticCommunityStore {
       this.ensureThreadParticipant(threadId, Number(userId));
       this.ensureThreadParticipant(threadId, Number(target.id));
       thread = this.get("SELECT * FROM threads WHERE id = ?", [threadId]);
-      await this.flush();
+      this.queueFlush();
     }
 
     return this.getThreadForUser(Number(userId), Number(thread.id));
@@ -465,7 +492,7 @@ class AntarcticCommunityStore {
     this.run("UPDATE threads SET updated_at = ? WHERE id = ?", [createdAt, Number(threadId)]);
     const messageId = Number(this.get("SELECT last_insert_rowid() AS id").id);
     const author = this.get("SELECT username FROM users WHERE id = ?", [Number(userId)]);
-    await this.flush();
+    this.queueFlush();
 
     return {
       id: messageId,
@@ -560,7 +587,7 @@ class AntarcticCommunityStore {
       [Number(userId), normalizedKey, encodedData, normalizedSummary, nowIso]
     );
 
-    await this.flush();
+    this.queueFlush();
     return this.getGameSave(Number(userId), normalizedKey);
   }
 
@@ -574,7 +601,26 @@ class AntarcticCommunityStore {
   async deleteGameSave(userId, gameKey) {
     const normalizedKey = this.normalizeGameKey(gameKey);
     this.run("DELETE FROM game_saves WHERE user_id = ? AND game_key = ?", [Number(userId), normalizedKey]);
-    await this.flush();
+    this.queueFlush();
+  }
+
+  /**
+   * Schedules a coalesced disk flush so auth/chat UI writes do not block the response path.
+   */
+  queueFlush() {
+    if (this.flushTimer) {
+      return;
+    }
+
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      this.flush().catch((error) => {
+        console.error("Failed to persist Antarctic community data.", error);
+      });
+    }, 35);
+    if (this.flushTimer && typeof this.flushTimer.unref === "function") {
+      this.flushTimer.unref();
+    }
   }
 
   /**
@@ -583,6 +629,10 @@ class AntarcticCommunityStore {
    * @returns {Promise<void>}
    */
   async flush() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
     const exported = Buffer.from(this.db.export());
     const targetPath = this.dbPath;
     this.writeChain = this.writeChain.then(() => fsp.writeFile(targetPath, exported));

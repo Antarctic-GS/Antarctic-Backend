@@ -894,6 +894,7 @@ async function routeRequest(req, res, config) {
           "api/discord/widget",
           "link-check",
           "api/account/session",
+          "api/community/bootstrap",
           "api/chat/threads",
           "api/saves"
         ]
@@ -957,6 +958,7 @@ async function routeRequest(req, res, config) {
           accountSession: "/api/account/session",
           accountLogin: "/api/account/login",
           accountSignup: "/api/account/signup",
+          communityBootstrap: "/api/community/bootstrap",
           chatThreads: "/api/chat/threads",
           saves: "/api/saves"
         },
@@ -983,11 +985,7 @@ async function routeRequest(req, res, config) {
       sendJson(
         res,
         200,
-        {
-          ok: true,
-          authenticated: false,
-          user: null
-        },
+        buildAnonymousCommunityPayload(),
         config,
         method === "HEAD"
       );
@@ -997,15 +995,21 @@ async function routeRequest(req, res, config) {
     sendJson(
       res,
       200,
-      {
-        ok: true,
-        authenticated: true,
-        token: session.token,
-        user: session.user
-      },
+      buildAuthenticatedCommunityPayload(session),
       config,
       method === "HEAD"
     );
+    return;
+  }
+
+  if (url.pathname === "/api/community/bootstrap" && (method === "GET" || method === "HEAD")) {
+    const session = await resolveAuthenticatedSession(req, config, false);
+    if (!session) {
+      sendJson(res, 200, buildAnonymousCommunityPayload(), config, method === "HEAD");
+      return;
+    }
+
+    sendJson(res, 200, buildAuthenticatedCommunityPayload(session), config, method === "HEAD");
     return;
   }
 
@@ -1019,12 +1023,7 @@ async function routeRequest(req, res, config) {
         password: payload.password
       });
       setSessionCookie(res, session.token, config);
-      sendJson(res, 201, {
-        ok: true,
-        authenticated: true,
-        token: session.token,
-        user: session.user
-      }, config);
+      sendJson(res, 201, buildAuthenticatedCommunityPayload(session), config);
     } catch (error) {
       sendJson(res, 400, { ok: false, error: String(error?.message || "Could not create account.") }, config);
     }
@@ -1041,12 +1040,7 @@ async function routeRequest(req, res, config) {
         password: payload.password
       });
       setSessionCookie(res, session.token, config);
-      sendJson(res, 200, {
-        ok: true,
-        authenticated: true,
-        token: session.token,
-        user: session.user
-      }, config);
+      sendJson(res, 200, buildAuthenticatedCommunityPayload(session), config);
     } catch (error) {
       sendJson(res, 401, { ok: false, error: String(error?.message || "Invalid username or password.") }, config);
     }
@@ -2437,6 +2431,36 @@ async function requireAuthenticatedSession(req, res, config, headOnly = false) {
   clearSessionCookie(res);
   sendJson(res, 401, { ok: false, error: "Login required." }, config, headOnly);
   return null;
+}
+
+function buildAnonymousCommunityPayload() {
+  return {
+    ok: true,
+    authenticated: false,
+    user: null,
+    bootstrap: {
+      threads: [],
+      rooms: [],
+      saves: [],
+      stats: {
+        threadCount: 0,
+        roomCount: 0,
+        joinedRoomCount: 0,
+        directCount: 0,
+        saveCount: 0
+      }
+    }
+  };
+}
+
+function buildAuthenticatedCommunityPayload(session) {
+  return {
+    ok: true,
+    authenticated: true,
+    token: session.token,
+    user: session.user,
+    bootstrap: managed.runtime.communityStore.getCommunitySnapshot(session.user.id)
+  };
 }
 
 function setSessionCookie(res, token, config) {

@@ -13,6 +13,7 @@ test("community store supports auth, rooms, direct messages, and cloud saves", a
   await store.initialize();
 
   t.after(async () => {
+    await store.flush();
     await fsp.rm(tempDir, { recursive: true, force: true });
   });
 
@@ -59,6 +60,16 @@ test("community store supports auth, rooms, direct messages, and cloud saves", a
   const saves = store.listGameSaves(firstAuth.user.id);
   assert.equal(saves.length, 1);
   assert.equal(saves[0].gameKey, "games/platformer/ovo.html");
+
+  const snapshot = store.getCommunitySnapshot(firstAuth.user.id);
+  assert.equal(snapshot.threads.length, 3);
+  assert.equal(snapshot.rooms.length, 2);
+  assert.equal(snapshot.saves.length, 1);
+  assert.equal(snapshot.stats.threadCount, 3);
+  assert.equal(snapshot.stats.roomCount, 2);
+  assert.equal(snapshot.stats.joinedRoomCount, 2);
+  assert.equal(snapshot.stats.directCount, 1);
+  assert.equal(snapshot.stats.saveCount, 1);
 
   const matches = store.searchUsers(firstAuth.user.id, "bliz");
   assert.deepEqual(matches.map((entry) => entry.username), ["blizzard"]);

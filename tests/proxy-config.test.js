@@ -75,6 +75,7 @@ test("backend exposes Scramjet proxy metadata and accepts Wisp upgrades", async 
   assert.equal(payload.services.wispUrl, `ws://127.0.0.1:${port}/wisp/`);
   assert.equal(payload.services.aiChat, "/api/ai/chat");
   assert.equal(payload.services.accountSession, "/api/account/session");
+  assert.equal(payload.services.communityBootstrap, "/api/community/bootstrap");
   assert.equal(payload.services.chatThreads, "/api/chat/threads");
   assert.equal(payload.services.saves, "/api/saves");
   assert.equal(payload.services.defaultAiModel, "qwen3.5:0.8b");

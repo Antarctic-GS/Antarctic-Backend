@@ -46,6 +46,7 @@ Important routes:
 - `GET /api/proxy/fetch?url=...`
 - `POST /api/ai/chat`
 - `GET /api/account/session`
+- `GET /api/community/bootstrap`
 - `POST /api/account/signup`
 - `POST /api/account/login`
 - `GET /api/chat/threads`
@@ -55,6 +56,11 @@ Important routes:
 - `GET /api/discord/widget`
 - `GET /link-check?url=...`
 - websocket upgrades on `/wisp/`
+
+Auth bootstrap behavior:
+
+- `GET /api/account/session`, `POST /api/account/signup`, `POST /api/account/login`, and `GET /api/community/bootstrap` all return the authenticated user plus the same `bootstrap` payload.
+- `bootstrap` includes joined threads, room catalog membership state, cloud saves, and aggregate stats so the frontend can paint the logged-in account/chat UI in one round trip.
 
 Docs:
 

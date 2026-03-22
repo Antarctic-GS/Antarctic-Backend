@@ -49,6 +49,7 @@ test("backend exposes Discord, AI, proxy, account, chat, and save surfaces", asy
     "api/discord/widget",
     "link-check",
     "api/account/session",
+    "api/community/bootstrap",
     "api/chat/threads",
     "api/saves"
   ]);

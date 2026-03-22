@@ -17,6 +17,7 @@ Supported backend features:
 - Scramjet proxy metadata and fetch endpoints
 - Wisp websocket transport at `/wisp/`
 - SQLite-backed account sessions at `GET /api/account/session`, `POST /api/account/signup`, and `POST /api/account/login`
+- one-call community bootstrap at `GET /api/community/bootstrap` plus auth responses that include the same bootstrap payload
 - room chat + DMs at `GET /api/chat/threads`, `POST /api/chat/rooms`, and `POST /api/chat/dms`
 - cloud saves at `GET /api/saves` and `PUT /api/saves/:gameKey`
 - URL/link analysis for Discord flows at `/link-check`
@@ -32,6 +33,7 @@ Before deploying:
 
 1. Run `npm run verify`.
 2. Confirm `/api/config/public` returns the expected proxy, AI, Discord, and community endpoints.
-3. If `FRONTEND_STATIC_DIR` is set, confirm `/` serves the frontend shell and asset paths resolve from that checkout.
-4. Create a throwaway account and confirm login, chat, and save APIs write into the configured SQLite file.
-5. If `FRONTEND_STATIC_DIR` is blank, confirm the static frontend is pointed at this backend base URL.
+3. Confirm account/session, signup, login, and `/api/community/bootstrap` all return the expected authenticated bootstrap payload for the logged-in UI.
+4. If `FRONTEND_STATIC_DIR` is set, confirm `/` serves the frontend shell and asset paths resolve from that checkout.
+5. Create a throwaway account and confirm login, chat, DMs, and save APIs write into the configured SQLite file.
+6. If `FRONTEND_STATIC_DIR` is blank, confirm the static frontend is pointed at this backend base URL.

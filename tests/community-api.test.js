@@ -46,7 +46,12 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   });
   assert.equal(signup.status, 201);
   assert.equal(signup.body.ok, true);
+  assert.equal(signup.body.authenticated, true);
   assert.equal(signup.body.user.username, "snowfox");
+  assert.equal(signup.body.bootstrap.stats.threadCount, 1);
+  assert.equal(signup.body.bootstrap.stats.roomCount, 1);
+  assert.equal(signup.body.bootstrap.stats.directCount, 0);
+  assert.equal(signup.body.bootstrap.stats.saveCount, 0);
 
   const token = signup.body.token;
   const authHeaders = { "x-antarctic-session": token, "content-type": "application/json" };
@@ -55,6 +60,15 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   assert.equal(session.status, 200);
   assert.equal(session.body.authenticated, true);
   assert.equal(session.body.user.username, "snowfox");
+  assert.equal(session.body.bootstrap.stats.threadCount, 1);
+
+  const secondSignup = await fetchJson(`${base}/api/account/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "blizzard", password: "windpass123" })
+  });
+  assert.equal(secondSignup.status, 201);
+  assert.equal(secondSignup.body.user.username, "blizzard");
 
   const room = await fetchJson(`${base}/api/chat/rooms`, {
     method: "POST",
@@ -63,6 +77,15 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   });
   assert.equal(room.status, 201);
   assert.equal(room.body.thread.name, "Late Night Games");
+
+  const direct = await fetchJson(`${base}/api/chat/dms`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({ username: "blizzard" })
+  });
+  assert.equal(direct.status, 201);
+  assert.equal(direct.body.thread.type, "direct");
+  assert.equal(direct.body.thread.peer.username, "blizzard");
 
   const message = await fetchJson(`${base}/api/chat/threads/${room.body.thread.id}/messages`, {
     method: "POST",
@@ -76,6 +99,7 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   assert.equal(threads.status, 200);
   assert.ok(Array.isArray(threads.body.threads));
   assert.ok(threads.body.threads.some((thread) => thread.name === "Late Night Games"));
+  assert.ok(threads.body.threads.some((thread) => thread.type === "direct"));
 
   const saveResponse = await fetchJson(`${base}/api/saves/${encodeURIComponent("games/platformer/ovo.html")}`, {
     method: "PUT",
@@ -106,6 +130,17 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
       ovo: "42"
     }
   });
+
+  const bootstrap = await fetchJson(`${base}/api/community/bootstrap`, { headers: authHeaders });
+  assert.equal(bootstrap.status, 200);
+  assert.equal(bootstrap.body.authenticated, true);
+  assert.equal(bootstrap.body.user.username, "snowfox");
+  assert.equal(bootstrap.body.bootstrap.stats.threadCount, 3);
+  assert.equal(bootstrap.body.bootstrap.stats.roomCount, 2);
+  assert.equal(bootstrap.body.bootstrap.stats.joinedRoomCount, 2);
+  assert.equal(bootstrap.body.bootstrap.stats.directCount, 1);
+  assert.equal(bootstrap.body.bootstrap.stats.saveCount, 1);
+  assert.equal(bootstrap.body.bootstrap.saves[0].gameKey, "games/platformer/ovo.html");
 });
 
 function startBackend(configPath) {
