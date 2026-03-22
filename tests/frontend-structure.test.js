@@ -52,7 +52,7 @@ test("frontend shell ships the built-in antarctic routes and proxy runtime asset
   assert.match(shellPage, /games-search-input/);
   assert.match(shellPage, /antarctic:\/\/games/);
   assert.match(shellPage, /antarctic:\/\/account/);
-  assert.match(shellPage, /antarctic:\/\/dms/);
+  assert.match(shellPage, /antarctic:\/\/chats/);
   assert.match(shellPage, /antarctic:\/\/groupchats/);
   assert.match(shellPage, /antarctic:\/\/settings/);
   assert.match(shellPage, /scram\/scramjet\.all\.js/);
