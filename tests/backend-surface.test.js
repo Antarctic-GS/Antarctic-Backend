@@ -78,9 +78,15 @@ test("backend can optionally serve a separate static frontend checkout", async (
   const configPath = path.join(tempDir, "palladium.env");
 
   await fsp.mkdir(path.join(frontendDir, "assets"), { recursive: true });
+  await fsp.mkdir(path.join(frontendDir, "data"), { recursive: true });
+  await fsp.mkdir(path.join(frontendDir, "games", "platformer"), { recursive: true });
+  await fsp.mkdir(path.join(frontendDir, "images", "game-img"), { recursive: true });
   await fsp.writeFile(path.join(frontendDir, "index.html"), "<!doctype html><title>Antarctic</title><div id=\"app\">shell</div>\n", "utf8");
   await fsp.writeFile(path.join(frontendDir, "styles.css"), "body{background:#001122;}\n", "utf8");
   await fsp.writeFile(path.join(frontendDir, "sw.js"), "self.addEventListener('fetch',()=>{});\n", "utf8");
+  await fsp.writeFile(path.join(frontendDir, "data", "games-catalog.js"), "window.ANTARCTIC_GAMES_CATALOG={games:[]};\n", "utf8");
+  await fsp.writeFile(path.join(frontendDir, "games", "platformer", "ovo.html"), "<!doctype html><title>OvO</title>\n", "utf8");
+  await fsp.writeFile(path.join(frontendDir, "images", "game-img", "ovo.png"), "png", "utf8");
   await fsp.writeFile(path.join(frontendDir, "assets", "logo.txt"), "antarctic\n", "utf8");
 
   await fsp.writeFile(
@@ -123,9 +129,22 @@ test("backend can optionally serve a separate static frontend checkout", async (
   assert.match(serviceWorkerResponse.headers.get("content-type") || "", /text\/javascript/);
   assert.equal(serviceWorkerResponse.headers.get("cache-control"), "no-cache");
 
+  const catalogResponse = await fetch(`${backendBase}/data/games-catalog.js`);
+  assert.equal(catalogResponse.status, 200);
+  assert.equal(catalogResponse.headers.get("cache-control"), "no-cache");
+
+  const gameResponse = await fetch(`${backendBase}/games/platformer/ovo.html`);
+  assert.equal(gameResponse.status, 200);
+  assert.equal(gameResponse.headers.get("cache-control"), "no-cache");
+
+  const imageResponse = await fetch(`${backendBase}/images/game-img/ovo.png`);
+  assert.equal(imageResponse.status, 200);
+  assert.equal(imageResponse.headers.get("cache-control"), "no-cache");
+
   const assetResponse = await fetch(`${backendBase}/assets/logo.txt`);
   assert.equal(assetResponse.status, 200);
   assert.equal(await assetResponse.text(), "antarctic\n");
+  assert.equal(assetResponse.headers.get("cache-control"), "public, max-age=300");
 
   const shellFallbackResponse = await fetch(`${backendBase}/settings`);
   assert.equal(shellFallbackResponse.status, 200);

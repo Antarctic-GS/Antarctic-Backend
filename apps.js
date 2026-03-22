@@ -1550,14 +1550,34 @@ function shouldServeFrontendShell(pathname) {
   return path.extname(normalized) === "";
 }
 
+function shouldDisableStaticCache(filePath, contentType, config) {
+  if (contentType.startsWith("text/html") || NO_CACHE_STATIC_BASENAMES.has(path.basename(filePath))) {
+    return true;
+  }
+
+  const frontendRoot = String(config && config.frontendStaticDir ? config.frontendStaticDir : "").trim();
+  if (!frontendRoot) {
+    return false;
+  }
+
+  const relativePath = path.relative(frontendRoot, filePath).replace(/\\/g, "/");
+  if (!relativePath || relativePath.startsWith("../")) {
+    return false;
+  }
+
+  return (
+    relativePath === "data/games-catalog.js" ||
+    relativePath === "data/games-catalog.json" ||
+    relativePath.startsWith("games/") ||
+    relativePath.startsWith("images/game-img/")
+  );
+}
+
 async function sendStaticFile(res, filePath, config, headOnly) {
   const body = headOnly ? null : await fsp.readFile(filePath);
   const stats = await fsp.stat(filePath);
   const contentType = STATIC_CONTENT_TYPES[path.extname(filePath).toLowerCase()] || "application/octet-stream";
-  const cacheControl =
-    contentType.startsWith("text/html") || NO_CACHE_STATIC_BASENAMES.has(path.basename(filePath))
-      ? "no-cache"
-      : "public, max-age=300";
+  const cacheControl = shouldDisableStaticCache(filePath, contentType, config) ? "no-cache" : "public, max-age=300";
   const headers = {
     "content-type": contentType,
     "cache-control": cacheControl,
