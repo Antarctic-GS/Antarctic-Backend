@@ -1046,7 +1046,7 @@ async function mainLoop() {
     status: "online",
     logPrefix: "Antarctic Links",
     activity: {
-      name: "Antarctic links",
+      name: "Antarctic Links",
       type: 3,
     },
     onReady: async () => {

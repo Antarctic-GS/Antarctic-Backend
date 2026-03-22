@@ -15,16 +15,19 @@ test("discord bot scripts use Antarctic branding while keeping legacy rules dete
   assert.match(commitBot, /Palladium-Games\/Antarctic-Games/);
   assert.match(commitBot, /Antarctic-Commit-Bot\/1\.0/);
   assert.match(commitBot, /Antarctic Commits/);
+  assert.match(commitBot, /name:\s*"Antarctic Commits"/);
 
   assert.match(linkBot, /Antarctic Link Drop/);
   assert.match(linkBot, /Antarctic Link Intelligence/);
   assert.match(linkBot, /Antarctic link command bot running/);
+  assert.match(linkBot, /name:\s*"Antarctic Links"/);
 
   assert.match(communityBot, /Antarctic Rules/);
   assert.match(communityBot, /antarctic-rules-v1/);
   assert.match(communityBot, /LEGACY_RULES_SIGNATURE = "palladium-rules-v1"/);
   assert.match(communityBot, /Welcome .* to Antarctic Games!/);
   assert.match(communityBot, /Antarctic Community/);
+  assert.match(communityBot, /name:\s*"Antarctic Community"/);
 
   assert.match(gatewayPresence, /antarctic-bot/);
   assert.match(gatewayPresence, /Antarctic shutdown/);

@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const os = require("node:os");
 const path = require("node:path");
 const fsp = require("node:fs/promises");
@@ -22,10 +23,30 @@ test("community store supports auth, rooms, direct messages, and cloud saves", a
 
   assert.equal(firstAuth.user.username, "snowfox");
   assert.equal(secondAuth.user.username, "blizzard");
+  assert.equal(firstAuth.bootstrap.stats.threadCount, 1);
+
+  const firstUserRow = store.get(
+    "SELECT password_hash, password_salt FROM users WHERE username_normalized = ?",
+    ["snowfox"]
+  );
+  assert.match(firstUserRow.password_hash, /^scrypt-4096\$/);
+
+  const legacyHash = crypto.scryptSync("icepass123", Buffer.from(firstUserRow.password_salt, "hex"), 64).toString("hex");
+  store.run(
+    "UPDATE users SET password_hash = ? WHERE username_normalized = ?",
+    [legacyHash, "snowfox"]
+  );
 
   const loggedIn = await store.login({ username: "snowfox", password: "icepass123" });
   const firstSession = await store.getSession(loggedIn.token);
   assert.equal(firstSession.user.username, "snowfox");
+  assert.equal(loggedIn.bootstrap.stats.threadCount, 1);
+
+  const upgradedUserRow = store.get(
+    "SELECT password_hash FROM users WHERE username_normalized = ?",
+    ["snowfox"]
+  );
+  assert.match(upgradedUserRow.password_hash, /^scrypt-4096\$/);
 
   const firstCatalog = store.listThreadsForUser(firstAuth.user.id);
   assert.ok(firstCatalog.rooms.some((room) => room.name === DEFAULT_ROOM_NAME));

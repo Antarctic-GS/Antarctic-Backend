@@ -1379,7 +1379,7 @@ function createPresence(intents) {
     status: "online",
     logPrefix: "Antarctic Community",
     activity: {
-      name: "Antarctic rules",
+      name: "Antarctic Community",
       type: 3,
     },
     onReady: async () => {

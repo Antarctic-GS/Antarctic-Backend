@@ -2014,24 +2014,24 @@ function normalizeAiPayload(payload, fallbackModel) {
 
   const numPredict = Number(options.num_predict);
   if (!Number.isFinite(numPredict) || numPredict <= 0) {
-    options.num_predict = 64;
+    options.num_predict = 48;
   }
 
   const numCtx = Number(options.num_ctx);
   if (!Number.isFinite(numCtx) || numCtx <= 0) {
-    options.num_ctx = 768;
+    options.num_ctx = 512;
   }
 
   const temperature = Number(options.temperature);
   if (!Number.isFinite(temperature) || temperature < 0) {
-    options.temperature = 0.1;
+    options.temperature = 0;
   }
 
   normalized.options = options;
 
   const keepAlive = String(normalized.keep_alive || "").trim();
   if (!keepAlive) {
-    normalized.keep_alive = "24h";
+    normalized.keep_alive = "48h";
   }
 
   if (typeof normalized.think !== "boolean") {
@@ -2496,7 +2496,10 @@ function buildAuthenticatedCommunityPayload(session) {
     authenticated: true,
     token: session.token,
     user: session.user,
-    bootstrap: managed.runtime.communityStore.getCommunitySnapshot(session.user.id)
+    bootstrap:
+      session && session.bootstrap && typeof session.bootstrap === "object"
+        ? session.bootstrap
+        : managed.runtime.communityStore.getCommunitySnapshot(session.user.id)
   };
 }
 

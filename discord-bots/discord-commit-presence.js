@@ -614,7 +614,7 @@ const presence = startDiscordPresence({
   status: "online",
   logPrefix: "Antarctic Commits",
   activity: {
-    name: "Antarctic commits",
+    name: "Antarctic Commits",
     type: 3
   }
 });

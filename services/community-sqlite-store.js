@@ -6,6 +6,13 @@ const initSqlJs = require("sql.js");
 
 const DEFAULT_SESSION_TTL_DAYS = 30;
 const DEFAULT_ROOM_NAME = "Lobby";
+const FAST_PASSWORD_HASH_PREFIX = "scrypt-4096$";
+const FAST_SCRYPT_OPTIONS = Object.freeze({
+  N: 4096,
+  r: 8,
+  p: 1,
+  maxmem: 64 * 1024 * 1024
+});
 const MAX_MESSAGE_LENGTH = 2_000;
 const MAX_PASSWORD_LENGTH = 200;
 const MAX_ROOM_NAME_LENGTH = 48;
@@ -49,10 +56,22 @@ function createToken() {
  *
  * @param {string} password - Password to hash.
  * @param {string} saltHex - Salt encoded as hexadecimal.
+ * @param {object} [options] - Optional scrypt tuning parameters.
  * @returns {string} Password hash encoded as hexadecimal.
  */
-function hashPassword(password, saltHex) {
-  return crypto.scryptSync(password, Buffer.from(saltHex, "hex"), 64).toString("hex");
+function hashPassword(password, saltHex, options) {
+  return crypto.scryptSync(password, Buffer.from(saltHex, "hex"), 64, options).toString("hex");
+}
+
+/**
+ * Hashes a password using the faster Antarctic auth format.
+ *
+ * @param {string} password - Password to hash.
+ * @param {string} saltHex - Salt encoded as hexadecimal.
+ * @returns {string} Prefixed password hash.
+ */
+function hashPasswordFast(password, saltHex) {
+  return `${FAST_PASSWORD_HASH_PREFIX}${hashPassword(password, saltHex, FAST_SCRYPT_OPTIONS)}`;
 }
 
 /**
@@ -142,7 +161,7 @@ class AntarcticCommunityStore {
     }
 
     const salt = crypto.randomBytes(16).toString("hex");
-    const hash = hashPassword(normalizedPassword, salt);
+    const hash = hashPasswordFast(normalizedPassword, salt);
     this.run(
       [
         "INSERT INTO users (username, username_normalized, password_hash, password_salt, created_at, updated_at)",
@@ -157,7 +176,8 @@ class AntarcticCommunityStore {
     this.queueFlush();
     return {
       token: session.token,
-      user: toPublicUser(user)
+      user: toPublicUser(user),
+      bootstrap: this.getCommunitySnapshot(Number(user.id))
     };
   }
 
@@ -177,19 +197,26 @@ class AntarcticCommunityStore {
       throw new Error("Invalid username or password.");
     }
 
-    const expectedHash = hashPassword(normalizedPassword, String(user.password_salt || ""));
-    const actualHash = String(user.password_hash || "");
-    if (!this.safeHashEquals(actualHash, expectedHash)) {
+    const verification = this.verifyPasswordHash(String(user.password_hash || ""), normalizedPassword, String(user.password_salt || ""));
+    if (!verification.ok) {
       throw new Error("Invalid username or password.");
     }
 
     this.cleanupExpiredSessions();
     this.ensureLobbyMembership(Number(user.id));
+    if (verification.needsUpgrade) {
+      this.run("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?", [
+        verification.upgradedHash,
+        this.nowIso(),
+        Number(user.id)
+      ]);
+    }
     const session = this.createSessionForUser(Number(user.id));
     this.queueFlush();
     return {
       token: session.token,
-      user: toPublicUser(user)
+      user: toPublicUser(user),
+      bootstrap: this.getCommunitySnapshot(Number(user.id))
     };
   }
 
@@ -954,6 +981,42 @@ class AntarcticCommunityStore {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Verifies the provided password against both the fast Antarctic format and the legacy hash format.
+   *
+   * @param {string} storedHash - Persisted hash value.
+   * @param {string} password - Plaintext password to verify.
+   * @param {string} saltHex - Persisted salt encoded as hexadecimal.
+   * @returns {{ ok: boolean, needsUpgrade: boolean, upgradedHash: string }} Verification result.
+   */
+  verifyPasswordHash(storedHash, password, saltHex) {
+    const normalizedHash = cleanText(storedHash);
+    const normalizedSalt = cleanText(saltHex);
+    if (!normalizedHash || !normalizedSalt) {
+      return { ok: false, needsUpgrade: false, upgradedHash: "" };
+    }
+
+    if (normalizedHash.startsWith(FAST_PASSWORD_HASH_PREFIX)) {
+      const expectedFastHash = hashPassword(password, normalizedSalt, FAST_SCRYPT_OPTIONS);
+      return {
+        ok: this.safeHashEquals(normalizedHash.slice(FAST_PASSWORD_HASH_PREFIX.length), expectedFastHash),
+        needsUpgrade: false,
+        upgradedHash: ""
+      };
+    }
+
+    const legacyHash = hashPassword(password, normalizedSalt);
+    if (!this.safeHashEquals(normalizedHash, legacyHash)) {
+      return { ok: false, needsUpgrade: false, upgradedHash: "" };
+    }
+
+    return {
+      ok: true,
+      needsUpgrade: true,
+      upgradedHash: hashPasswordFast(password, normalizedSalt)
+    };
   }
 
   /**
