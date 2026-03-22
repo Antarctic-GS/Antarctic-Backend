@@ -60,6 +60,13 @@ test("community store supports auth, rooms, DM requests, direct messages, and cl
   const roomMessagesBefore = store.listMessages(secondAuth.user.id, createdRoom.id);
   assert.deepEqual(roomMessagesBefore, []);
 
+  await store.leaveRoom(secondAuth.user.id, createdRoom.id);
+  assert.equal(
+    store.listThreadsForUser(secondAuth.user.id).threads.some((thread) => thread.id === createdRoom.id),
+    false
+  );
+  await store.joinRoom(secondAuth.user.id, createdRoom.id);
+
   await store.addMessage(firstAuth.user.id, createdRoom.id, "Welcome to the room");
   const roomMessages = store.listMessages(secondAuth.user.id, createdRoom.id);
   assert.equal(roomMessages.length, 1);

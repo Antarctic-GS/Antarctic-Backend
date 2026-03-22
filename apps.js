@@ -1187,6 +1187,21 @@ async function routeRequest(req, res, config) {
     return;
   }
 
+  const roomLeaveMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)\/leave$/);
+  if (roomLeaveMatch && method === "POST") {
+    const session = await requireAuthenticatedSession(req, res, config);
+    if (!session) return;
+
+    try {
+      await managed.runtime.communityStore.leaveRoom(session.user.id, Number(roomLeaveMatch[1]));
+      const snapshot = managed.runtime.communityStore.getCommunitySnapshot(session.user.id);
+      sendJson(res, 200, { ok: true, leftThreadId: Number(roomLeaveMatch[1]), ...snapshot }, config);
+    } catch (error) {
+      sendJson(res, 404, { ok: false, error: String(error?.message || "Could not leave room.") }, config);
+    }
+    return;
+  }
+
   const threadMessagesMatch = url.pathname.match(/^\/api\/chat\/threads\/(\d+)\/messages$/);
   if (threadMessagesMatch && (method === "GET" || method === "HEAD")) {
     const session = await requireAuthenticatedSession(req, res, config, method === "HEAD");

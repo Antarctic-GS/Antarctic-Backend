@@ -90,6 +90,20 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   assert.equal(room.status, 201);
   assert.equal(room.body.thread.name, "Late Night Games");
 
+  const leaveRoom = await fetchJson(`${base}/api/chat/threads/${room.body.thread.id}/leave`, {
+    method: "POST",
+    headers: authHeaders
+  });
+  assert.equal(leaveRoom.status, 200);
+  assert.equal(leaveRoom.body.leftThreadId, room.body.thread.id);
+  assert.equal(leaveRoom.body.threads.some((thread) => thread.id === room.body.thread.id), false);
+
+  const rejoinRoom = await fetchJson(`${base}/api/chat/threads/${room.body.thread.id}/join`, {
+    method: "POST",
+    headers: authHeaders
+  });
+  assert.equal(rejoinRoom.status, 200);
+
   const direct = await fetchJson(`${base}/api/chat/dms`, {
     method: "POST",
     headers: authHeaders,

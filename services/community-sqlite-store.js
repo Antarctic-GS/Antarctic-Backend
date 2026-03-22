@@ -566,6 +566,27 @@ class AntarcticCommunityStore {
   }
 
   /**
+   * Removes a participant from a room they previously joined.
+   *
+   * @param {number} userId - User id.
+   * @param {number} threadId - Room thread id.
+   * @returns {Promise<void>}
+   */
+  async leaveRoom(userId, threadId) {
+    const room = this.getThreadForUser(Number(userId), Number(threadId));
+    if (!room || room.type !== "room") {
+      throw new Error("That room is unavailable.");
+    }
+
+    this.run(
+      "DELETE FROM thread_participants WHERE thread_id = ? AND user_id = ?",
+      [Number(threadId), Number(userId)]
+    );
+    this.run("UPDATE threads SET updated_at = ? WHERE id = ?", [this.nowIso(), Number(threadId)]);
+    this.queueFlush();
+  }
+
+  /**
    * Records private-room invitations and notifies each invited user through the Antarctic system DM.
    *
    * @param {number} threadId - Private room thread id.

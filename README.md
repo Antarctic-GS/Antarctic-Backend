@@ -55,6 +55,7 @@ Important routes:
 - `POST /api/chat/dms`
 - `POST /api/chat/dms/:id/accept`
 - `POST /api/chat/dms/:id/deny`
+- `POST /api/chat/threads/:id/leave`
 - `GET /api/saves`
 - `GET /api/discord/widget`
 - `GET /link-check?url=...`

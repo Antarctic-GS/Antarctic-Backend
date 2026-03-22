@@ -20,7 +20,7 @@ Supported backend features:
 - Wisp websocket transport at `/wisp/`
 - SQLite-backed account sessions at `GET /api/account/session`, `POST /api/account/signup`, and `POST /api/account/login`
 - one-call community bootstrap at `GET /api/community/bootstrap` plus auth responses that include the same bootstrap payload
-- room chat + DM requests at `GET /api/chat/threads`, `POST /api/chat/rooms`, `POST /api/chat/dms`, `POST /api/chat/dms/:id/accept`, and `POST /api/chat/dms/:id/deny`
+- room chat + DM requests at `GET /api/chat/threads`, `POST /api/chat/rooms`, `POST /api/chat/dms`, `POST /api/chat/dms/:id/accept`, `POST /api/chat/dms/:id/deny`, and `POST /api/chat/threads/:id/leave`
 - room creation supports `public` and `private` visibility; private rooms accept invite usernames, notify those users via an Antarctic system DM, and only invited users can join
 - chat messages cap at 2000 characters, and the built-in automod applies a short mute when blocked profanity is sent
 - cloud saves at `GET /api/saves` and `PUT /api/saves/:gameKey`
