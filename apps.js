@@ -1605,6 +1605,10 @@ async function tryServeFrontendStatic(req, res, config, pathname, headOnly) {
     return true;
   }
 
+  if (tryServeScramjetIframeBootstrap(req, res, config, pathname, headOnly)) {
+    return true;
+  }
+
   if (!shouldServeFrontendShell(pathname)) {
     return false;
   }
@@ -1727,6 +1731,102 @@ function tryRedirectScramjetNavigation(req, res, config, pathname, headOnly) {
   }
 
   sendRedirect(res, 302, buildShellRedirectLocation(target), config, headOnly);
+  return true;
+}
+
+function isIframeHtmlNavigationRequest(req) {
+  const accept = String(req && req.headers ? req.headers.accept || "" : "").toLowerCase();
+  const destination = String(req && req.headers ? req.headers["sec-fetch-dest"] || "" : "").toLowerCase();
+  return destination === "iframe" || (!destination && accept.includes("text/html"));
+}
+
+function renderScramjetIframeBootstrap(target) {
+  const normalizedTarget = JSON.stringify(String(target || ""));
+  return [
+    "<!doctype html>",
+    '<html lang="en">',
+    "<head>",
+    '  <meta charset="utf-8" />',
+    '  <meta name="viewport" content="width=device-width, initial-scale=1" />',
+    "  <title>Loading Proxy Page...</title>",
+    "  <style>",
+    "    html, body { height: 100%; margin: 0; }",
+    "    body { display: grid; place-items: center; background: #070b14; color: #dce9ff; font: 500 15px/1.5 system-ui, sans-serif; }",
+    "    .scramjet-bootstrap { padding: 20px 24px; border-radius: 18px; background: rgba(13, 19, 33, 0.9); border: 1px solid rgba(120, 160, 255, 0.18); box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28); max-width: 420px; text-align: center; }",
+    "    .scramjet-bootstrap strong { display: block; font-size: 18px; margin-bottom: 8px; }",
+    "    .scramjet-bootstrap span { color: rgba(220, 233, 255, 0.75); }",
+    "  </style>",
+    "</head>",
+    "<body>",
+    '  <div class="scramjet-bootstrap">',
+    "    <strong>Loading the proxied page...</strong>",
+    "    <span>Reconnecting the proxy runtime inside this frame.</span>",
+    "  </div>",
+    "  <script>",
+    "    (function () {",
+    `      var target = ${normalizedTarget};`,
+    '      var retryKey = "__antarctic_scramjet_boot";',
+    "      var current = new URL(window.location.href);",
+    '      var retries = Number(current.searchParams.get(retryKey) || "0");',
+    "      var finished = false;",
+    "      function finish() {",
+    "        if (finished) return true;",
+    "        finished = true;",
+    "        return false;",
+    "      }",
+    "      function reloadThroughServiceWorker() {",
+    "        if (finish()) return;",
+    "        var next = new URL(window.location.href);",
+    "        next.searchParams.set(retryKey, String(retries + 1));",
+    "        window.location.replace(next.toString());",
+    "      }",
+    "      function escapeToShell() {",
+    "        if (finish()) return;",
+    "        var shellUrl = '/?uri=' + encodeURIComponent(target);",
+    "        try {",
+    "          if (window.top && window.top !== window) {",
+    "            window.top.location.replace(shellUrl);",
+    "            return;",
+    "          }",
+    "        } catch (error) {",
+    "          // Ignore cross-context access issues and fall back to this frame.",
+    "        }",
+    "        window.location.replace(shellUrl);",
+    "      }",
+    "      function startRetry() {",
+    "        if (navigator.serviceWorker && navigator.serviceWorker.controller) {",
+    "          reloadThroughServiceWorker();",
+    "          return;",
+    "        }",
+    "        if (navigator.serviceWorker) {",
+    "          navigator.serviceWorker.addEventListener('controllerchange', reloadThroughServiceWorker, { once: true });",
+    "          navigator.serviceWorker.ready.then(reloadThroughServiceWorker).catch(function () {",
+    "            if (retries >= 1) escapeToShell();",
+    "          });",
+    "        }",
+    "        window.setTimeout(function () {",
+    "          if (retries >= 1) {",
+    "            escapeToShell();",
+    "            return;",
+    "          }",
+    "          reloadThroughServiceWorker();",
+    "        }, 1200);",
+    "      }",
+    "      startRetry();",
+    "    })();",
+    "  </script>",
+    "</body>",
+    "</html>"
+  ].join("\n");
+}
+
+function tryServeScramjetIframeBootstrap(req, res, config, pathname, headOnly) {
+  const target = decodeScramjetTarget(pathname);
+  if (!target || !isIframeHtmlNavigationRequest(req)) {
+    return false;
+  }
+
+  sendHtml(res, 200, renderScramjetIframeBootstrap(target), config, headOnly);
   return true;
 }
 
@@ -2851,6 +2951,22 @@ function sendText(res, status, message, config) {
     "content-type": "text/plain; charset=utf-8",
     "content-length": String(body.length)
   });
+  res.end(body);
+}
+
+function sendHtml(res, status, html, config, headOnly = false) {
+  addCors(res, config);
+  addSecurityHeaders(res, { allowEmbedding: true });
+  const body = Buffer.from(String(html || ""), "utf8");
+  res.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": String(body.length),
+    "cache-control": "no-cache"
+  });
+  if (headOnly) {
+    res.end();
+    return;
+  }
   res.end(body);
 }
 

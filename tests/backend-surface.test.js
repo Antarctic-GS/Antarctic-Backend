@@ -178,7 +178,10 @@ test("backend can optionally serve a separate static frontend checkout", async (
       }
     }
   );
-  assert.equal(scramjetIframeResponse.status, 404);
+  assert.equal(scramjetIframeResponse.status, 200);
+  assert.match(scramjetIframeResponse.headers.get("content-type") || "", /text\/html/);
+  assert.equal(scramjetIframeResponse.headers.get("cache-control"), "no-cache");
+  assert.match(await scramjetIframeResponse.text(), /Loading the proxied page/);
 
   const traversalResponse = await fetch(`${backendBase}/%2e%2e/%2e%2e/package.json`);
   assert.equal(traversalResponse.status, 404);
