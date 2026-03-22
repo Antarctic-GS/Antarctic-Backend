@@ -18,7 +18,8 @@ When changing the backend:
 6. Keep AI defaults biased toward fast interactive shell replies unless the user explicitly asks for slower/deeper reasoning.
 7. Prefer compatibility-preserving changes for existing env vars unless the user explicitly asks for breaking renames.
 8. Keep `./start.sh` first-boot safe on clean machines, including dependency bootstrap behavior.
-9. End every task with `npm run verify`.
+9. Keep the vendored frontend Scramjet/BareMux/libcurl runtime aligned with the backend package sources. Use `npm run refresh:frontend-proxy` when you need a clean wipe-and-resync, and keep the sync/check tooling covered by tests.
+10. End every task with `npm run verify`.
 
 Regression expectations:
 
@@ -26,6 +27,7 @@ Regression expectations:
 - `/api/config/public` exposes proxy, AI, Discord, and community metadata without legacy games/assets fields, including `/api/community/bootstrap`.
 - the proxy surface stays usable when `/wisp/` is broken upstream by exposing `/api/proxy/request` as the HTTP fallback transport.
 - the frontend passthrough also needs to serve `/service/scramjet/...` through the shell fallback so encoded proxy URLs never 404 on the host.
+- the backend verify step should fail if a sibling frontend checkout is present but its vendored Scramjet/BareMux/libcurl runtime no longer matches the backend package sources.
 - backend-only mode leaves `/` unserved when `FRONTEND_STATIC_DIR` is blank.
 - configured frontend passthrough can serve the separate static frontend shell and assets.
 - legacy backend-hosted game and image routes remain absent.

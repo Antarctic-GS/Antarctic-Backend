@@ -49,6 +49,12 @@ npm run migrate:supabase
 
 You can override the defaults with `--config`, `--sqlite`, `--supabase`, or keep the target intact with `--no-reset-target`, but the normal production move is to let the script reset the Supabase tables and copy the full SQLite dataset over exactly once.
 
+Proxy runtime maintenance:
+
+- `npm run sync:frontend-proxy` copies the installed Scramjet, BareMux, and libcurl runtime files into the sibling frontend checkout.
+- `npm run refresh:frontend-proxy` first removes the vendored frontend proxy-runtime folders, then recopies those assets fresh.
+- `npm run verify` now checks that the vendored frontend proxy runtime still matches the backend package sources whenever a sibling frontend checkout exists.
+
 Production target:
 
 - point `sethpang.com` at this backend

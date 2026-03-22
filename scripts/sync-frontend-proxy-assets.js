@@ -32,29 +32,10 @@ const ASSET_TARGETS = [
   }
 ];
 
-async function main() {
-  const frontendDir = resolveFrontendDir();
-
-  for (const target of ASSET_TARGETS) {
-    const sourcePath = path.join(BACKEND_DIR, target.sourcePath);
-    if (!fs.existsSync(sourcePath)) {
-      throw new Error(
-        `Missing proxy asset ${sourcePath}. Run npm install in ${BACKEND_DIR} before syncing frontend proxy assets.`
-      );
-    }
-
-    const targetPath = path.join(frontendDir, target.targetPath);
-    await fsp.mkdir(path.dirname(targetPath), { recursive: true });
-    await fsp.copyFile(sourcePath, targetPath);
-  }
-
-  console.log("Synced %d Scramjet proxy assets into %s", ASSET_TARGETS.length, frontendDir);
-}
-
-function resolveFrontendDir() {
+function resolveFrontendDir(baseDir = BACKEND_DIR) {
   const candidates = [
-    path.resolve(BACKEND_DIR, "..", "palladium-frontend"),
-    path.resolve(BACKEND_DIR, "..", "frontend")
+    path.resolve(baseDir, "..", "palladium-frontend"),
+    path.resolve(baseDir, "..", "frontend")
   ];
 
   for (const candidate of candidates) {
@@ -68,7 +49,140 @@ function resolveFrontendDir() {
   );
 }
 
-main().catch((error) => {
-  console.error(error.message || error);
-  process.exitCode = 1;
-});
+function resolveAssetPairs(options = {}) {
+  const backendDir = path.resolve(options.backendDir || BACKEND_DIR);
+  const frontendDir = path.resolve(options.frontendDir || resolveFrontendDir(backendDir));
+  return ASSET_TARGETS.map((target) => ({
+    sourcePath: path.join(backendDir, target.sourcePath),
+    targetPath: path.join(frontendDir, target.targetPath),
+    relativeTargetPath: target.targetPath
+  }));
+}
+
+function getProxyAssetRoots(frontendDir) {
+  return [
+    path.join(frontendDir, "scram"),
+    path.join(frontendDir, "baremux"),
+    path.join(frontendDir, "libcurl")
+  ];
+}
+
+async function ensureSourceAssetsExist(assetPairs, backendDir) {
+  for (const asset of assetPairs) {
+    if (!fs.existsSync(asset.sourcePath)) {
+      throw new Error(
+        `Missing proxy asset ${asset.sourcePath}. Run npm install in ${backendDir} before syncing frontend proxy assets.`
+      );
+    }
+  }
+}
+
+async function wipeFrontendProxyAssets(frontendDir) {
+  const roots = getProxyAssetRoots(frontendDir);
+  for (const root of roots) {
+    await fsp.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function getMismatchedProxyAssets(assetPairs) {
+  const mismatches = [];
+
+  for (const asset of assetPairs) {
+    const sourceBuffer = await fsp.readFile(asset.sourcePath);
+    let targetBuffer = null;
+    try {
+      targetBuffer = await fsp.readFile(asset.targetPath);
+    } catch {
+      mismatches.push(`${asset.relativeTargetPath} (missing)`);
+      continue;
+    }
+
+    if (!sourceBuffer.equals(targetBuffer)) {
+      mismatches.push(asset.relativeTargetPath);
+    }
+  }
+
+  return mismatches;
+}
+
+async function syncFrontendProxyAssets(options = {}) {
+  const backendDir = path.resolve(options.backendDir || BACKEND_DIR);
+  const frontendDir = path.resolve(options.frontendDir || resolveFrontendDir(backendDir));
+  const clean = Boolean(options.clean);
+  const check = Boolean(options.check);
+  const assetPairs = resolveAssetPairs({ backendDir, frontendDir });
+
+  await ensureSourceAssetsExist(assetPairs, backendDir);
+
+  if (check) {
+    const mismatches = await getMismatchedProxyAssets(assetPairs);
+    if (mismatches.length) {
+      throw new Error(
+        `Frontend proxy assets are out of sync: ${mismatches.join(", ")}. Run npm run refresh:frontend-proxy in ${backendDir}.`
+      );
+    }
+
+    return {
+      backendDir,
+      frontendDir,
+      count: assetPairs.length,
+      verified: true
+    };
+  }
+
+  if (clean) {
+    await wipeFrontendProxyAssets(frontendDir);
+  }
+
+  for (const asset of assetPairs) {
+    await fsp.mkdir(path.dirname(asset.targetPath), { recursive: true });
+    await fsp.copyFile(asset.sourcePath, asset.targetPath);
+  }
+
+  return {
+    backendDir,
+    frontendDir,
+    count: assetPairs.length,
+    cleaned: clean
+  };
+}
+
+function parseArgs(argv) {
+  return {
+    check: argv.includes("--check"),
+    clean: argv.includes("--clean")
+  };
+}
+
+async function main() {
+  const options = parseArgs(process.argv.slice(2));
+  const result = await syncFrontendProxyAssets(options);
+  if (options.check) {
+    console.log("Verified %d Scramjet proxy assets in %s", result.count, result.frontendDir);
+    return;
+  }
+
+  console.log(
+    "%s %d Scramjet proxy assets into %s",
+    result.cleaned ? "Refreshed" : "Synced",
+    result.count,
+    result.frontendDir
+  );
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error.message || error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  ASSET_TARGETS,
+  BACKEND_DIR,
+  getMismatchedProxyAssets,
+  resolveAssetPairs,
+  resolveFrontendDir,
+  syncFrontendProxyAssets,
+  wipeFrontendProxyAssets
+};
