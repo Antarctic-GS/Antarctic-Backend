@@ -51,6 +51,7 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   assert.equal(signup.body.bootstrap.stats.threadCount, 1);
   assert.equal(signup.body.bootstrap.stats.roomCount, 1);
   assert.equal(signup.body.bootstrap.stats.directCount, 0);
+  assert.equal(signup.body.bootstrap.stats.incomingDirectRequestCount, 0);
   assert.equal(signup.body.bootstrap.stats.saveCount, 0);
 
   const token = signup.body.token;
@@ -69,6 +70,17 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   });
   assert.equal(secondSignup.status, 201);
   assert.equal(secondSignup.body.user.username, "blizzard");
+  const secondToken = secondSignup.body.token;
+  const secondAuthHeaders = { "x-antarctic-session": secondToken, "content-type": "application/json" };
+
+  const thirdSignup = await fetchJson(`${base}/api/account/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "aurora", password: "polarpass123" })
+  });
+  assert.equal(thirdSignup.status, 201);
+  const thirdToken = thirdSignup.body.token;
+  const thirdAuthHeaders = { "x-antarctic-session": thirdToken, "content-type": "application/json" };
 
   const room = await fetchJson(`${base}/api/chat/rooms`, {
     method: "POST",
@@ -84,8 +96,48 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
     body: JSON.stringify({ username: "blizzard" })
   });
   assert.equal(direct.status, 201);
-  assert.equal(direct.body.thread.type, "direct");
-  assert.equal(direct.body.thread.peer.username, "blizzard");
+  assert.equal(direct.body.kind, "request");
+  assert.equal(direct.body.request.target.username, "blizzard");
+
+  const secondBootstrap = await fetchJson(`${base}/api/community/bootstrap`, { headers: secondAuthHeaders });
+  assert.equal(secondBootstrap.status, 200);
+  assert.equal(secondBootstrap.body.bootstrap.incomingDirectRequests.length, 1);
+  assert.equal(secondBootstrap.body.bootstrap.stats.incomingDirectRequestCount, 1);
+
+  const acceptDirect = await fetchJson(
+    `${base}/api/chat/dms/${secondBootstrap.body.bootstrap.incomingDirectRequests[0].id}/accept`,
+    {
+      method: "POST",
+      headers: secondAuthHeaders
+    }
+  );
+  assert.equal(acceptDirect.status, 200);
+  assert.equal(acceptDirect.body.kind, "thread");
+  assert.equal(acceptDirect.body.thread.type, "direct");
+  assert.equal(acceptDirect.body.thread.peer.username, "snowfox");
+
+  const deniedDirect = await fetchJson(`${base}/api/chat/dms`, {
+    method: "POST",
+    headers: thirdAuthHeaders,
+    body: JSON.stringify({ username: "snowfox" })
+  });
+  assert.equal(deniedDirect.status, 201);
+  assert.equal(deniedDirect.body.kind, "request");
+
+  const incomingForSnowfox = await fetchJson(`${base}/api/community/bootstrap`, { headers: authHeaders });
+  assert.equal(incomingForSnowfox.status, 200);
+  assert.equal(incomingForSnowfox.body.bootstrap.incomingDirectRequests.length, 1);
+
+  const denyDirect = await fetchJson(
+    `${base}/api/chat/dms/${incomingForSnowfox.body.bootstrap.incomingDirectRequests[0].id}/deny`,
+    {
+      method: "POST",
+      headers: authHeaders
+    }
+  );
+  assert.equal(denyDirect.status, 200);
+  assert.equal(denyDirect.body.kind, "request");
+  assert.equal(denyDirect.body.request.status, "denied");
 
   const message = await fetchJson(`${base}/api/chat/threads/${room.body.thread.id}/messages`, {
     method: "POST",
@@ -100,6 +152,7 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   assert.ok(Array.isArray(threads.body.threads));
   assert.ok(threads.body.threads.some((thread) => thread.name === "Late Night Games"));
   assert.ok(threads.body.threads.some((thread) => thread.type === "direct"));
+  assert.ok(Array.isArray(threads.body.incomingDirectRequests));
 
   const saveResponse = await fetchJson(`${base}/api/saves/${encodeURIComponent("games/platformer/ovo.html")}`, {
     method: "PUT",
@@ -139,8 +192,10 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   assert.equal(bootstrap.body.bootstrap.stats.roomCount, 2);
   assert.equal(bootstrap.body.bootstrap.stats.joinedRoomCount, 2);
   assert.equal(bootstrap.body.bootstrap.stats.directCount, 1);
+  assert.equal(bootstrap.body.bootstrap.stats.incomingDirectRequestCount, 0);
   assert.equal(bootstrap.body.bootstrap.stats.saveCount, 1);
   assert.equal(bootstrap.body.bootstrap.saves[0].gameKey, "games/platformer/ovo.html");
+  assert.equal(bootstrap.body.bootstrap.incomingDirectRequests.length, 0);
 });
 
 function startBackend(configPath) {

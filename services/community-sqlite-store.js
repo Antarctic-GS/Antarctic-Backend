@@ -91,11 +91,49 @@ function directKeyForUsers(firstUserId, secondUserId) {
  * @param {object} row - Raw SQLite row.
  * @returns {{ id: number, username: string, createdAt: string }} Public user shape.
  */
-function toPublicUser(row) {
+  function toPublicUser(row) {
   return {
     id: Number(row.id),
     username: String(row.username || ""),
     createdAt: String(row.created_at || "")
+  };
+}
+
+/**
+ * Converts a raw direct-request row into the public API shape.
+ *
+ * @param {object} row - Raw SQLite row.
+ * @returns {{
+ *   id: number,
+ *   status: string,
+ *   createdAt: string,
+ *   updatedAt: string,
+ *   threadId: number|null,
+ *   requester: { id: number, username: string, createdAt: string }|null,
+ *   target: { id: number, username: string, createdAt: string }|null
+ * }} Public direct-request representation.
+ */
+function toPublicDirectRequest(row) {
+  return {
+    id: Number(row.id),
+    status: String(row.status || ""),
+    createdAt: String(row.created_at || ""),
+    updatedAt: String(row.updated_at || ""),
+    threadId: row.resolved_thread_id ? Number(row.resolved_thread_id) : null,
+    requester: row.requester_id
+      ? {
+          id: Number(row.requester_id),
+          username: String(row.requester_username || ""),
+          createdAt: String(row.requester_created_at || "")
+        }
+      : null,
+    target: row.target_id
+      ? {
+          id: Number(row.target_id),
+          username: String(row.target_username || ""),
+          createdAt: String(row.target_created_at || "")
+        }
+      : null
   };
 }
 
@@ -355,11 +393,25 @@ class AntarcticCommunityStore {
    * Returns the logged-in community dashboard payload in one call.
    *
    * @param {number} userId - Authenticated user id.
-   * @returns {{ threads: object[], rooms: object[], saves: object[], stats: { threadCount: number, roomCount: number, joinedRoomCount: number, directCount: number, saveCount: number } }} Snapshot payload.
+   * @returns {{
+   *   threads: object[],
+   *   rooms: object[],
+   *   saves: object[],
+   *   incomingDirectRequests: object[],
+   *   stats: {
+   *     threadCount: number,
+   *     roomCount: number,
+   *     joinedRoomCount: number,
+   *     directCount: number,
+   *     incomingDirectRequestCount: number,
+   *     saveCount: number
+   *   }
+   * }} Snapshot payload.
    */
   getCommunitySnapshot(userId) {
     const catalog = this.listThreadsForUser(Number(userId));
     const saves = this.listGameSaves(Number(userId));
+    const incomingDirectRequests = this.listIncomingDirectRequests(Number(userId));
     const threads = Array.isArray(catalog.threads) ? catalog.threads : [];
     const rooms = Array.isArray(catalog.rooms) ? catalog.rooms : [];
 
@@ -367,11 +419,13 @@ class AntarcticCommunityStore {
       threads,
       rooms,
       saves,
+      incomingDirectRequests,
       stats: {
         threadCount: threads.length,
         roomCount: rooms.length,
         joinedRoomCount: rooms.filter((room) => room && room.joined).length,
         directCount: threads.filter((thread) => thread && thread.type === "direct").length,
+        incomingDirectRequestCount: incomingDirectRequests.length,
         saveCount: saves.length
       }
     };
@@ -420,13 +474,13 @@ class AntarcticCommunityStore {
   }
 
   /**
-   * Creates or reuses a direct message thread between two users.
+   * Creates a pending DM request or reuses/accepts an existing direct thread.
    *
    * @param {number} userId - Authenticated user id.
    * @param {string} username - Target username.
-   * @returns {Promise<object>} Direct thread details.
+   * @returns {Promise<{ kind: "request"|"thread", request?: object, thread?: object }>} DM creation result.
    */
-  async createDirectThread(userId, username) {
+  async requestDirectThread(userId, username) {
     const target = this.findUserByUsername(this.normalizeUsername(username));
     if (!target) {
       throw new Error("That user does not exist.");
@@ -436,6 +490,52 @@ class AntarcticCommunityStore {
     }
 
     const directKey = directKeyForUsers(Number(userId), Number(target.id));
+    const existingThread = this.get("SELECT * FROM threads WHERE direct_key = ?", [directKey]);
+    if (existingThread) {
+      return {
+        kind: "thread",
+        thread: this.getThreadForUser(Number(userId), Number(existingThread.id))
+      };
+    }
+
+    const pendingIncoming = this.getPendingDirectRequest(Number(target.id), Number(userId));
+    if (pendingIncoming) {
+      return this.acceptDirectRequest(Number(userId), Number(pendingIncoming.id));
+    }
+
+    const existingOutgoing = this.getPendingDirectRequest(Number(userId), Number(target.id));
+    if (existingOutgoing) {
+      return {
+        kind: "request",
+        request: this.getDirectRequestForUser(Number(userId), Number(existingOutgoing.id))
+      };
+    }
+
+    const nowIso = this.nowIso();
+    this.run(
+      [
+        "INSERT INTO direct_requests (requester_user_id, target_user_id, status, resolved_thread_id, created_at, updated_at)",
+        "VALUES (?, ?, 'pending', NULL, ?, ?)"
+      ].join(" "),
+      [Number(userId), Number(target.id), nowIso, nowIso]
+    );
+    const requestId = Number(this.get("SELECT last_insert_rowid() AS id").id);
+    this.queueFlush();
+    return {
+      kind: "request",
+      request: this.getDirectRequestForUser(Number(userId), requestId)
+    };
+  }
+
+  /**
+   * Creates or reuses a direct-message thread between two users immediately.
+   *
+   * @param {number} firstUserId - First participant id.
+   * @param {number} secondUserId - Second participant id.
+   * @returns {object} Direct thread details for the first user.
+   */
+  createDirectThread(firstUserId, secondUserId) {
+    const directKey = directKeyForUsers(Number(firstUserId), Number(secondUserId));
     let thread = this.get("SELECT * FROM threads WHERE direct_key = ?", [directKey]);
     if (!thread) {
       const nowIso = this.nowIso();
@@ -444,16 +544,66 @@ class AntarcticCommunityStore {
           "INSERT INTO threads (type, name, owner_user_id, direct_key, created_at, updated_at)",
           "VALUES ('direct', NULL, ?, ?, ?, ?)"
         ].join(" "),
-        [Number(userId), directKey, nowIso, nowIso]
+        [Number(firstUserId), directKey, nowIso, nowIso]
       );
       const threadId = Number(this.get("SELECT last_insert_rowid() AS id").id);
-      this.ensureThreadParticipant(threadId, Number(userId));
-      this.ensureThreadParticipant(threadId, Number(target.id));
+      this.ensureThreadParticipant(threadId, Number(firstUserId));
+      this.ensureThreadParticipant(threadId, Number(secondUserId));
       thread = this.get("SELECT * FROM threads WHERE id = ?", [threadId]);
       this.queueFlush();
     }
 
-    return this.getThreadForUser(Number(userId), Number(thread.id));
+    return this.getThreadForUser(Number(firstUserId), Number(thread.id));
+  }
+
+  /**
+   * Accepts a pending incoming DM request and opens the resulting direct thread.
+   *
+   * @param {number} userId - Authenticated target user id.
+   * @param {number} requestId - Pending request id.
+   * @returns {Promise<{ kind: "thread", request: object, thread: object }>} Accepted DM result.
+   */
+  async acceptDirectRequest(userId, requestId) {
+    const request = this.getDirectRequestForUser(Number(userId), Number(requestId));
+    if (!request || request.status !== "pending" || !request.target || Number(request.target.id) !== Number(userId)) {
+      throw new Error("That DM request is unavailable.");
+    }
+
+    const thread = this.createDirectThread(Number(request.requester.id), Number(request.target.id));
+    this.run(
+      "UPDATE direct_requests SET status = 'accepted', resolved_thread_id = ?, updated_at = ? WHERE id = ?",
+      [Number(thread.id), this.nowIso(), Number(requestId)]
+    );
+    this.queueFlush();
+    return {
+      kind: "thread",
+      request: this.getDirectRequestForUser(Number(userId), Number(requestId)),
+      thread: this.getThreadForUser(Number(userId), Number(thread.id))
+    };
+  }
+
+  /**
+   * Denies a pending incoming DM request.
+   *
+   * @param {number} userId - Authenticated target user id.
+   * @param {number} requestId - Pending request id.
+   * @returns {Promise<{ kind: "request", request: object }>} Denied DM result.
+   */
+  async denyDirectRequest(userId, requestId) {
+    const request = this.getDirectRequestForUser(Number(userId), Number(requestId));
+    if (!request || request.status !== "pending" || !request.target || Number(request.target.id) !== Number(userId)) {
+      throw new Error("That DM request is unavailable.");
+    }
+
+    this.run(
+      "UPDATE direct_requests SET status = 'denied', updated_at = ? WHERE id = ?",
+      [this.nowIso(), Number(requestId)]
+    );
+    this.queueFlush();
+    return {
+      kind: "request",
+      request: this.getDirectRequestForUser(Number(userId), Number(requestId))
+    };
   }
 
   /**
@@ -719,6 +869,15 @@ class AntarcticCommunityStore {
       "  content TEXT NOT NULL,",
       "  created_at TEXT NOT NULL",
       ");",
+      "CREATE TABLE IF NOT EXISTS direct_requests (",
+      "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
+      "  requester_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,",
+      "  target_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,",
+      "  status TEXT NOT NULL CHECK(status IN ('pending', 'accepted', 'denied')),",
+      "  resolved_thread_id INTEGER REFERENCES threads(id) ON DELETE SET NULL,",
+      "  created_at TEXT NOT NULL,",
+      "  updated_at TEXT NOT NULL",
+      ");",
       "CREATE TABLE IF NOT EXISTS game_saves (",
       "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
       "  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,",
@@ -732,6 +891,8 @@ class AntarcticCommunityStore {
       "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);",
       "CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id, id);",
       "CREATE INDEX IF NOT EXISTS idx_thread_participants_user_id ON thread_participants(user_id);",
+      "CREATE INDEX IF NOT EXISTS idx_direct_requests_target_status ON direct_requests(target_user_id, status, created_at);",
+      "CREATE INDEX IF NOT EXISTS idx_direct_requests_requester_status ON direct_requests(requester_user_id, status, created_at);",
       "CREATE INDEX IF NOT EXISTS idx_game_saves_user_id ON game_saves(user_id, updated_at);"
     ].join("\n"));
   }
@@ -866,6 +1027,74 @@ class AntarcticCommunityStore {
     );
 
     return row ? this.toPublicThread(row) : null;
+  }
+
+  /**
+   * Lists pending incoming DM requests for a user.
+   *
+   * @param {number} userId - Authenticated user id.
+   * @returns {object[]} Ordered pending incoming requests.
+   */
+  listIncomingDirectRequests(userId) {
+    return this.all(
+      [
+        "SELECT direct_requests.id, direct_requests.status, direct_requests.created_at, direct_requests.updated_at, direct_requests.resolved_thread_id,",
+        "requester.id AS requester_id, requester.username AS requester_username, requester.created_at AS requester_created_at,",
+        "target.id AS target_id, target.username AS target_username, target.created_at AS target_created_at",
+        "FROM direct_requests",
+        "JOIN users AS requester ON requester.id = direct_requests.requester_user_id",
+        "JOIN users AS target ON target.id = direct_requests.target_user_id",
+        "WHERE direct_requests.target_user_id = ? AND direct_requests.status = 'pending'",
+        "ORDER BY direct_requests.created_at DESC, direct_requests.id DESC"
+      ].join(" "),
+      [Number(userId)]
+    ).map(toPublicDirectRequest);
+  }
+
+  /**
+   * Fetches one DM request visible to the requester or target.
+   *
+   * @param {number} userId - Authenticated user id.
+   * @param {number} requestId - DM request id.
+   * @returns {object|null} Public request or null.
+   */
+  getDirectRequestForUser(userId, requestId) {
+    const row = this.get(
+      [
+        "SELECT direct_requests.id, direct_requests.status, direct_requests.created_at, direct_requests.updated_at, direct_requests.resolved_thread_id,",
+        "requester.id AS requester_id, requester.username AS requester_username, requester.created_at AS requester_created_at,",
+        "target.id AS target_id, target.username AS target_username, target.created_at AS target_created_at",
+        "FROM direct_requests",
+        "JOIN users AS requester ON requester.id = direct_requests.requester_user_id",
+        "JOIN users AS target ON target.id = direct_requests.target_user_id",
+        "WHERE direct_requests.id = ?",
+        "AND (direct_requests.requester_user_id = ? OR direct_requests.target_user_id = ?)"
+      ].join(" "),
+      [Number(requestId), Number(userId), Number(userId)]
+    );
+
+    return row ? toPublicDirectRequest(row) : null;
+  }
+
+  /**
+   * Looks up one pending DM request between a requester and target.
+   *
+   * @param {number} requesterUserId - Requesting user id.
+   * @param {number} targetUserId - Target user id.
+   * @returns {object|null} Pending request row or null.
+   */
+  getPendingDirectRequest(requesterUserId, targetUserId) {
+    return this.get(
+      [
+        "SELECT * FROM direct_requests",
+        "WHERE requester_user_id = ?",
+        "AND target_user_id = ?",
+        "AND status = 'pending'",
+        "ORDER BY id DESC",
+        "LIMIT 1"
+      ].join(" "),
+      [Number(requesterUserId), Number(targetUserId)]
+    );
   }
 
   /**

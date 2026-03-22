@@ -7,7 +7,7 @@ const fsp = require("node:fs/promises");
 
 const { AntarcticCommunityStore, DEFAULT_ROOM_NAME } = require("../services/community-sqlite-store.js");
 
-test("community store supports auth, rooms, direct messages, and cloud saves", async (t) => {
+test("community store supports auth, rooms, DM requests, direct messages, and cloud saves", async (t) => {
   const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "antarctic-community-store-"));
   const dbPath = path.join(tempDir, "community.sqlite");
   const store = new AntarcticCommunityStore({ dbPath });
@@ -20,6 +20,7 @@ test("community store supports auth, rooms, direct messages, and cloud saves", a
 
   const firstAuth = await store.signUp({ username: "snowfox", password: "icepass123" });
   const secondAuth = await store.signUp({ username: "blizzard", password: "windpass123" });
+  const thirdAuth = await store.signUp({ username: "aurora", password: "polarpass123" });
 
   assert.equal(firstAuth.user.username, "snowfox");
   assert.equal(secondAuth.user.username, "blizzard");
@@ -64,14 +65,32 @@ test("community store supports auth, rooms, direct messages, and cloud saves", a
   assert.equal(roomMessages.length, 1);
   assert.equal(roomMessages[0].content, "Welcome to the room");
 
-  const directThread = await store.createDirectThread(firstAuth.user.id, "blizzard");
-  assert.equal(directThread.type, "direct");
-  assert.equal(directThread.peer.username, "blizzard");
+  const directRequest = await store.requestDirectThread(firstAuth.user.id, "blizzard");
+  assert.equal(directRequest.kind, "request");
+  assert.equal(directRequest.request.target.username, "blizzard");
 
-  await store.addMessage(secondAuth.user.id, directThread.id, "hey there");
-  const directMessages = store.listMessages(firstAuth.user.id, directThread.id);
+  const pendingSnapshot = store.getCommunitySnapshot(secondAuth.user.id);
+  assert.equal(pendingSnapshot.incomingDirectRequests.length, 1);
+  assert.equal(pendingSnapshot.incomingDirectRequests[0].requester.username, "snowfox");
+
+  const acceptedDirect = await store.acceptDirectRequest(secondAuth.user.id, pendingSnapshot.incomingDirectRequests[0].id);
+  assert.equal(acceptedDirect.kind, "thread");
+  assert.equal(acceptedDirect.thread.type, "direct");
+  assert.equal(acceptedDirect.thread.peer.username, "snowfox");
+
+  await store.addMessage(secondAuth.user.id, acceptedDirect.thread.id, "hey there");
+  const directMessages = store.listMessages(firstAuth.user.id, acceptedDirect.thread.id);
   assert.equal(directMessages.length, 1);
   assert.equal(directMessages[0].content, "hey there");
+
+  const deniedRequest = await store.requestDirectThread(thirdAuth.user.id, "snowfox");
+  assert.equal(deniedRequest.kind, "request");
+  const denialSnapshot = store.getCommunitySnapshot(firstAuth.user.id);
+  assert.equal(denialSnapshot.incomingDirectRequests.length, 1);
+  const deniedResult = await store.denyDirectRequest(firstAuth.user.id, denialSnapshot.incomingDirectRequests[0].id);
+  assert.equal(deniedResult.kind, "request");
+  assert.equal(deniedResult.request.status, "denied");
+  assert.equal(store.getCommunitySnapshot(firstAuth.user.id).incomingDirectRequests.length, 0);
 
   await store.putGameSave(firstAuth.user.id, "games/platformer/ovo.html", { localStorage: { ovo: "42" } }, "OvO cloud");
   const save = store.getGameSave(firstAuth.user.id, "games/platformer/ovo.html");
@@ -86,10 +105,12 @@ test("community store supports auth, rooms, direct messages, and cloud saves", a
   assert.equal(snapshot.threads.length, 3);
   assert.equal(snapshot.rooms.length, 2);
   assert.equal(snapshot.saves.length, 1);
+  assert.equal(snapshot.incomingDirectRequests.length, 0);
   assert.equal(snapshot.stats.threadCount, 3);
   assert.equal(snapshot.stats.roomCount, 2);
   assert.equal(snapshot.stats.joinedRoomCount, 2);
   assert.equal(snapshot.stats.directCount, 1);
+  assert.equal(snapshot.stats.incomingDirectRequestCount, 0);
   assert.equal(snapshot.stats.saveCount, 1);
 
   const matches = store.searchUsers(firstAuth.user.id, "bliz");

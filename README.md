@@ -8,7 +8,7 @@ What it owns:
 - Discord bot sidecars and Discord-facing APIs
 - AI chat APIs backed by Ollama
 - Scramjet proxy APIs plus the Wisp websocket transport
-- SQLite-backed account auth, chat rooms, DMs, and cloud-save APIs
+- SQLite-backed account auth, chat rooms, DM requests/acceptance, live DMs, and cloud-save APIs
 - link-check analysis used by the Discord tooling
 - proxy-runtime sync tooling for the separate static frontend
 - optional static passthrough for a separate frontend checkout via `FRONTEND_STATIC_DIR`
@@ -53,6 +53,8 @@ Important routes:
 - `GET /api/chat/threads`
 - `POST /api/chat/rooms`
 - `POST /api/chat/dms`
+- `POST /api/chat/dms/:id/accept`
+- `POST /api/chat/dms/:id/deny`
 - `GET /api/saves`
 - `GET /api/discord/widget`
 - `GET /link-check?url=...`
@@ -61,7 +63,8 @@ Important routes:
 Auth bootstrap behavior:
 
 - `GET /api/account/session`, `POST /api/account/signup`, `POST /api/account/login`, and `GET /api/community/bootstrap` all return the authenticated user plus the same `bootstrap` payload.
-- `bootstrap` includes joined threads, room catalog membership state, cloud saves, and aggregate stats so the frontend can paint the logged-in account/chat UI in one round trip.
+- `bootstrap` includes joined threads, room catalog membership state, incoming DM requests, cloud saves, and aggregate stats so the frontend can paint the logged-in account/chat UI in one round trip.
+- `POST /api/chat/dms` creates a pending DM request unless a direct thread already exists or the other user already requested you, in which case the request is resolved into the shared thread immediately.
 - AI chat requests are normalized for low-latency shell responses by default, with shorter context/prediction limits and long-lived Ollama keep-alive reuse.
 - The static frontend prefers Wisp for Scramjet, but can fall back to `POST /api/proxy/request` when a reverse proxy is not forwarding `/wisp/` websocket upgrades correctly.
 

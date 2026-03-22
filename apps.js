@@ -1089,8 +1089,8 @@ async function routeRequest(req, res, config) {
     const session = await requireAuthenticatedSession(req, res, config, method === "HEAD");
     if (!session) return;
 
-    const catalog = managed.runtime.communityStore.listThreadsForUser(session.user.id);
-    sendJson(res, 200, { ok: true, user: session.user, ...catalog }, config, method === "HEAD");
+    const snapshot = managed.runtime.communityStore.getCommunitySnapshot(session.user.id);
+    sendJson(res, 200, { ok: true, user: session.user, ...snapshot }, config, method === "HEAD");
     return;
   }
 
@@ -1102,8 +1102,8 @@ async function routeRequest(req, res, config) {
 
     try {
       const thread = await managed.runtime.communityStore.createRoom(session.user.id, payload.name);
-      const catalog = managed.runtime.communityStore.listThreadsForUser(session.user.id);
-      sendJson(res, 201, { ok: true, thread, ...catalog }, config);
+      const snapshot = managed.runtime.communityStore.getCommunitySnapshot(session.user.id);
+      sendJson(res, 201, { ok: true, thread, ...snapshot }, config);
     } catch (error) {
       sendJson(res, 400, { ok: false, error: String(error?.message || "Could not create room.") }, config);
     }
@@ -1117,11 +1117,54 @@ async function routeRequest(req, res, config) {
     if (!payload) return;
 
     try {
-      const thread = await managed.runtime.communityStore.createDirectThread(session.user.id, payload.username);
-      const catalog = managed.runtime.communityStore.listThreadsForUser(session.user.id);
-      sendJson(res, 201, { ok: true, thread, ...catalog }, config);
+      const result = await managed.runtime.communityStore.requestDirectThread(session.user.id, payload.username);
+      const snapshot = managed.runtime.communityStore.getCommunitySnapshot(session.user.id);
+      sendJson(
+        res,
+        201,
+        {
+          ok: true,
+          kind: result.kind,
+          thread: result.thread || null,
+          request: result.request || null,
+          ...snapshot
+        },
+        config
+      );
     } catch (error) {
       sendJson(res, 400, { ok: false, error: String(error?.message || "Could not open direct message.") }, config);
+    }
+    return;
+  }
+
+  const directRequestActionMatch = url.pathname.match(/^\/api\/chat\/dms\/(\d+)\/(accept|deny)$/);
+  if (directRequestActionMatch && method === "POST") {
+    const session = await requireAuthenticatedSession(req, res, config);
+    if (!session) return;
+
+    const requestId = Number(directRequestActionMatch[1]);
+    const action = directRequestActionMatch[2];
+
+    try {
+      const result =
+        action === "accept"
+          ? await managed.runtime.communityStore.acceptDirectRequest(session.user.id, requestId)
+          : await managed.runtime.communityStore.denyDirectRequest(session.user.id, requestId);
+      const snapshot = managed.runtime.communityStore.getCommunitySnapshot(session.user.id);
+      sendJson(
+        res,
+        200,
+        {
+          ok: true,
+          kind: result.kind,
+          thread: result.thread || null,
+          request: result.request || null,
+          ...snapshot
+        },
+        config
+      );
+    } catch (error) {
+      sendJson(res, 404, { ok: false, error: String(error?.message || "Could not update DM request.") }, config);
     }
     return;
   }
@@ -1133,8 +1176,8 @@ async function routeRequest(req, res, config) {
 
     try {
       const thread = await managed.runtime.communityStore.joinRoom(session.user.id, Number(roomJoinMatch[1]));
-      const catalog = managed.runtime.communityStore.listThreadsForUser(session.user.id);
-      sendJson(res, 200, { ok: true, thread, ...catalog }, config);
+      const snapshot = managed.runtime.communityStore.getCommunitySnapshot(session.user.id);
+      sendJson(res, 200, { ok: true, thread, ...snapshot }, config);
     } catch (error) {
       sendJson(res, 404, { ok: false, error: String(error?.message || "Could not join room.") }, config);
     }
@@ -2635,11 +2678,13 @@ function buildAnonymousCommunityPayload() {
       threads: [],
       rooms: [],
       saves: [],
+      incomingDirectRequests: [],
       stats: {
         threadCount: 0,
         roomCount: 0,
         joinedRoomCount: 0,
         directCount: 0,
+        incomingDirectRequestCount: 0,
         saveCount: 0
       }
     }
