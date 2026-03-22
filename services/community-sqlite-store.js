@@ -6,6 +6,18 @@ const initSqlJs = require("sql.js");
 
 const DEFAULT_SESSION_TTL_DAYS = 30;
 const DEFAULT_ROOM_NAME = "Lobby";
+const DEFAULT_SYSTEM_USERNAME = "antarctic";
+const AUTOMOD_MUTE_MS = 3 * 60 * 1000;
+const AUTOMOD_MUTED_REASON = "language";
+const AUTOMOD_PATTERNS = Object.freeze([
+  /\bfuck(?:er|ers|ing|ings|ed|s)?\b/i,
+  /\bshit(?:head|heads|ty|ting|tings|s)?\b/i,
+  /\basshole(?:s)?\b/i,
+  /\bbitch(?:es|ing|y)?\b/i,
+  /\bbastard(?:s)?\b/i,
+  /\bmotherfucker(?:s)?\b/i,
+  /\bdickhead(?:s)?\b/i
+]);
 const FAST_PASSWORD_HASH_PREFIX = "scrypt-4096$";
 const FAST_SCRYPT_OPTIONS = Object.freeze({
   N: 4096,
@@ -15,6 +27,7 @@ const FAST_SCRYPT_OPTIONS = Object.freeze({
 });
 const MAX_MESSAGE_LENGTH = 2_000;
 const MAX_PASSWORD_LENGTH = 200;
+const MAX_PRIVATE_ROOM_INVITES = 12;
 const MAX_ROOM_NAME_LENGTH = 48;
 const MAX_SAVE_BYTES = 500_000;
 const MAX_SUMMARY_LENGTH = 140;
@@ -49,6 +62,26 @@ function toIsoNow(nowValue = new Date()) {
  */
 function createToken() {
   return crypto.randomBytes(32).toString("hex");
+}
+
+/**
+ * Finds a blocked profanity pattern in a message if one exists.
+ *
+ * @param {string} value - Candidate message text.
+ * @returns {string} Matched blocked term or an empty string.
+ */
+function findAutomodMatch(value) {
+  const normalized = cleanText(value);
+  if (!normalized) return "";
+
+  for (const pattern of AUTOMOD_PATTERNS) {
+    const match = normalized.match(pattern);
+    if (match && match[0]) {
+      return String(match[0]);
+    }
+  }
+
+  return "";
 }
 
 /**
@@ -134,6 +167,38 @@ function toPublicDirectRequest(row) {
           createdAt: String(row.target_created_at || "")
         }
       : null
+  };
+}
+
+/**
+ * Converts a raw room row into the public room catalog shape.
+ *
+ * @param {object} row - Raw SQLite row.
+ * @returns {{
+ *   id: number,
+ *   type: "room",
+ *   name: string,
+ *   visibility: string,
+ *   memberCount: number,
+ *   joined: boolean,
+ *   invited: boolean,
+ *   ownerUserId: number,
+ *   createdAt: string,
+ *   updatedAt: string
+ * }} Public room representation.
+ */
+function toPublicRoom(row) {
+  return {
+    id: Number(row.id),
+    type: "room",
+    name: String(row.name || ""),
+    visibility: String(row.visibility || "public"),
+    memberCount: Number(row.member_count || 0),
+    joined: Boolean(Number(row.joined || 0)),
+    invited: Boolean(Number(row.invited || 0)),
+    ownerUserId: Number(row.owner_user_id || 0),
+    createdAt: String(row.created_at || ""),
+    updatedAt: String(row.updated_at || "")
   };
 }
 
@@ -340,7 +405,7 @@ class AntarcticCommunityStore {
   listThreadsForUser(userId) {
     const joinedThreadRows = this.all(
       [
-        "SELECT threads.id, threads.type, threads.name, threads.owner_user_id, threads.created_at, threads.updated_at,",
+        "SELECT threads.id, threads.type, threads.name, threads.visibility, threads.owner_user_id, threads.created_at, threads.updated_at,",
         "messages.id AS last_message_id, messages.content AS last_message_content, messages.created_at AS last_message_created_at,",
         "message_author.username AS last_message_author_username,",
         "other_user.id AS other_user_id, other_user.username AS other_user_username",
@@ -362,26 +427,22 @@ class AntarcticCommunityStore {
 
     const rooms = this.all(
       [
-        "SELECT threads.id, threads.type, threads.name, threads.owner_user_id, threads.created_at, threads.updated_at,",
-        "COUNT(participants.user_id) AS member_count,",
-        "SUM(CASE WHEN participants.user_id = ? THEN 1 ELSE 0 END) AS joined",
+        "SELECT threads.id, threads.type, threads.name, threads.visibility, threads.owner_user_id, threads.created_at, threads.updated_at,",
+        "(SELECT COUNT(*) FROM thread_participants participants WHERE participants.thread_id = threads.id) AS member_count,",
+        "EXISTS(SELECT 1 FROM thread_participants participants WHERE participants.thread_id = threads.id AND participants.user_id = ?) AS joined,",
+        "EXISTS(SELECT 1 FROM room_invitations invites WHERE invites.thread_id = threads.id AND invites.user_id = ? AND invites.status = 'pending') AS invited",
         "FROM threads",
-        "LEFT JOIN thread_participants participants ON participants.thread_id = threads.id",
         "WHERE threads.type = 'room'",
-        "GROUP BY threads.id",
+        "AND (",
+        "  threads.visibility = 'public'",
+        "  OR threads.owner_user_id = ?",
+        "  OR EXISTS(SELECT 1 FROM thread_participants participants WHERE participants.thread_id = threads.id AND participants.user_id = ?)",
+        "  OR EXISTS(SELECT 1 FROM room_invitations invites WHERE invites.thread_id = threads.id AND invites.user_id = ? AND invites.status = 'pending')",
+        ")",
         "ORDER BY LOWER(threads.name) ASC, threads.id ASC"
       ].join(" "),
-      [Number(userId)]
-    ).map((row) => ({
-      id: Number(row.id),
-      type: "room",
-      name: String(row.name || ""),
-      memberCount: Number(row.member_count || 0),
-      joined: Boolean(Number(row.joined || 0)),
-      ownerUserId: Number(row.owner_user_id || 0),
-      createdAt: String(row.created_at || ""),
-      updatedAt: String(row.updated_at || "")
-    }));
+      [Number(userId), Number(userId), Number(userId), Number(userId), Number(userId)]
+    ).map(toPublicRoom);
 
     return {
       threads: joinedThreadRows.map((row) => this.toPublicThread(row)),
@@ -432,30 +493,38 @@ class AntarcticCommunityStore {
   }
 
   /**
-   * Creates a new public chat room and joins the creator automatically.
+   * Creates a new chat room and joins the creator automatically.
    *
    * @param {number} userId - Creating user id.
    * @param {string} roomName - Desired room name.
+   * @param {{ visibility?: string, invitedUsers?: string[]|string }} [options] - Room options.
    * @returns {Promise<object>} Created room thread.
    */
-  async createRoom(userId, roomName) {
+  async createRoom(userId, roomName, options = {}) {
     const normalizedName = this.normalizeRoomName(roomName);
+    const visibility = this.normalizeRoomVisibility(options.visibility);
+    const invitedUsers = visibility === "private"
+      ? this.resolveInvitedUsers(options.invitedUsers, Number(userId))
+      : [];
     const nowIso = this.nowIso();
     this.run(
       [
-        "INSERT INTO threads (type, name, owner_user_id, direct_key, created_at, updated_at)",
-        "VALUES ('room', ?, ?, NULL, ?, ?)"
+        "INSERT INTO threads (type, name, visibility, owner_user_id, direct_key, created_at, updated_at)",
+        "VALUES ('room', ?, ?, ?, NULL, ?, ?)"
       ].join(" "),
-      [normalizedName, Number(userId), nowIso, nowIso]
+      [normalizedName, visibility, Number(userId), nowIso, nowIso]
     );
     const threadId = Number(this.get("SELECT last_insert_rowid() AS id").id);
     this.ensureThreadParticipant(threadId, Number(userId));
+    if (visibility === "private" && invitedUsers.length) {
+      this.applyPrivateRoomInvitations(threadId, Number(userId), normalizedName, invitedUsers);
+    }
     this.queueFlush();
     return this.getThreadForUser(Number(userId), threadId);
   }
 
   /**
-   * Ensures the authenticated user is a participant of a public room.
+   * Ensures the authenticated user is a participant of a room they can access.
    *
    * @param {number} userId - User id.
    * @param {number} threadId - Room thread id.
@@ -467,10 +536,85 @@ class AntarcticCommunityStore {
       throw new Error("That room does not exist.");
     }
 
+    const alreadyJoined = this.get(
+      "SELECT 1 FROM thread_participants WHERE thread_id = ? AND user_id = ?",
+      [Number(threadId), Number(userId)]
+    );
+    if (String(room.visibility || "public") === "private" && !alreadyJoined && Number(room.owner_user_id) !== Number(userId)) {
+      const invite = this.get(
+        [
+          "SELECT * FROM room_invitations",
+          "WHERE thread_id = ?",
+          "AND user_id = ?",
+          "AND status = 'pending'"
+        ].join(" "),
+        [Number(threadId), Number(userId)]
+      );
+      if (!invite) {
+        throw new Error("That private room is invite-only.");
+      }
+      this.run(
+        "UPDATE room_invitations SET status = 'accepted', updated_at = ? WHERE thread_id = ? AND user_id = ?",
+        [this.nowIso(), Number(threadId), Number(userId)]
+      );
+    }
+
     this.ensureThreadParticipant(Number(threadId), Number(userId));
     this.run("UPDATE threads SET updated_at = ? WHERE id = ?", [this.nowIso(), Number(threadId)]);
     this.queueFlush();
     return this.getThreadForUser(Number(userId), Number(threadId));
+  }
+
+  /**
+   * Records private-room invitations and notifies each invited user through the Antarctic system DM.
+   *
+   * @param {number} threadId - Private room thread id.
+   * @param {number} invitedByUserId - User id who created the room.
+   * @param {string} roomName - Room name used in notifications.
+   * @param {string[]} invitedUsers - Validated usernames to invite.
+   */
+  applyPrivateRoomInvitations(threadId, invitedByUserId, roomName, invitedUsers) {
+    const inviter = this.get("SELECT username FROM users WHERE id = ?", [Number(invitedByUserId)]);
+    const invitedByUsername = String(inviter && inviter.username ? inviter.username : DEFAULT_SYSTEM_USERNAME);
+    const nowIso = this.nowIso();
+
+    for (const username of invitedUsers) {
+      const target = this.findUserByUsername(username);
+      if (!target || Number(target.id) === Number(invitedByUserId)) {
+        continue;
+      }
+
+      this.run(
+        [
+          "INSERT INTO room_invitations (thread_id, user_id, invited_by_user_id, status, created_at, updated_at)",
+          "VALUES (?, ?, ?, 'pending', ?, ?)",
+          "ON CONFLICT(thread_id, user_id) DO UPDATE SET",
+          "invited_by_user_id = excluded.invited_by_user_id,",
+          "status = 'pending',",
+          "updated_at = excluded.updated_at"
+        ].join(" "),
+        [Number(threadId), Number(target.id), Number(invitedByUserId), nowIso, nowIso]
+      );
+      this.notifyRoomInvite(Number(target.id), roomName, invitedByUsername);
+    }
+  }
+
+  /**
+   * Sends an Antarctic system DM notifying a user about a private-room invite.
+   *
+   * @param {number} invitedUserId - Invited user id.
+   * @param {string} roomName - Invited room name.
+   * @param {string} invitedByUsername - Inviter username.
+   */
+  notifyRoomInvite(invitedUserId, roomName, invitedByUsername) {
+    const systemUser = this.getSystemUser();
+    if (!systemUser) return;
+
+    const directThread = this.createDirectThread(Number(systemUser.id), Number(invitedUserId));
+    const message =
+      `You were invited to the private room "${roomName}" by @${invitedByUsername}. ` +
+      "Open Antarctic chat and accept the room from your room list when you are ready.";
+    this.addSystemMessage(Number(systemUser.id), Number(directThread.id), message);
   }
 
   /**
@@ -541,8 +685,8 @@ class AntarcticCommunityStore {
       const nowIso = this.nowIso();
       this.run(
         [
-          "INSERT INTO threads (type, name, owner_user_id, direct_key, created_at, updated_at)",
-          "VALUES ('direct', NULL, ?, ?, ?, ?)"
+          "INSERT INTO threads (type, name, visibility, owner_user_id, direct_key, created_at, updated_at)",
+          "VALUES ('direct', NULL, 'public', ?, ?, ?, ?)"
         ].join(" "),
         [Number(firstUserId), directKey, nowIso, nowIso]
       );
@@ -648,6 +792,40 @@ class AntarcticCommunityStore {
    * @returns {Promise<object>} Created message.
    */
   async addMessage(userId, threadId, content) {
+    const activeMute = this.getActiveMute(Number(userId));
+    if (activeMute) {
+      throw new Error(activeMute.message);
+    }
+
+    const blockedTerm = findAutomodMatch(content);
+    if (blockedTerm) {
+      throw new Error(this.applyAutomodMute(Number(userId), blockedTerm));
+    }
+
+    return this.addMessageInternal(Number(userId), Number(threadId), content);
+  }
+
+  /**
+   * Adds a system-generated message without applying user moderation checks.
+   *
+   * @param {number} userId - Message author id.
+   * @param {number} threadId - Target thread id.
+   * @param {string} content - Message content.
+   * @returns {object} Created message.
+   */
+  addSystemMessage(userId, threadId, content) {
+    return this.addMessageInternal(Number(userId), Number(threadId), content);
+  }
+
+  /**
+   * Inserts a message for a thread participant after validation.
+   *
+   * @param {number} userId - Message author id.
+   * @param {number} threadId - Target thread id.
+   * @param {string} content - Message content.
+   * @returns {object} Created message.
+   */
+  addMessageInternal(userId, threadId, content) {
     const thread = this.getThreadForUser(Number(userId), Number(threadId));
     if (!thread) {
       throw new Error("That conversation is unavailable.");
@@ -826,6 +1004,17 @@ class AntarcticCommunityStore {
   }
 
   /**
+   * Checks whether a table already contains a named column.
+   *
+   * @param {string} tableName - SQLite table name.
+   * @param {string} columnName - Column name to look for.
+   * @returns {boolean} Whether the column exists.
+   */
+  tableHasColumn(tableName, columnName) {
+    return this.all(`PRAGMA table_info(${tableName})`, []).some((row) => String(row.name || "") === String(columnName));
+  }
+
+  /**
    * Executes schema migrations required by the current application version.
    */
   runSchemaMigrations() {
@@ -837,6 +1026,8 @@ class AntarcticCommunityStore {
       "  username_normalized TEXT NOT NULL UNIQUE,",
       "  password_hash TEXT NOT NULL,",
       "  password_salt TEXT NOT NULL,",
+      "  muted_until TEXT NOT NULL DEFAULT '',",
+      "  muted_reason TEXT NOT NULL DEFAULT '',",
       "  created_at TEXT NOT NULL,",
       "  updated_at TEXT NOT NULL",
       ");",
@@ -851,6 +1042,7 @@ class AntarcticCommunityStore {
       "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
       "  type TEXT NOT NULL CHECK(type IN ('room', 'direct')),",
       "  name TEXT,",
+      "  visibility TEXT NOT NULL DEFAULT 'public' CHECK(visibility IN ('public', 'private')),",
       "  owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,",
       "  direct_key TEXT UNIQUE,",
       "  created_at TEXT NOT NULL,",
@@ -878,6 +1070,15 @@ class AntarcticCommunityStore {
       "  created_at TEXT NOT NULL,",
       "  updated_at TEXT NOT NULL",
       ");",
+      "CREATE TABLE IF NOT EXISTS room_invitations (",
+      "  thread_id INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,",
+      "  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,",
+      "  invited_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,",
+      "  status TEXT NOT NULL CHECK(status IN ('pending', 'accepted', 'declined')),",
+      "  created_at TEXT NOT NULL,",
+      "  updated_at TEXT NOT NULL,",
+      "  PRIMARY KEY(thread_id, user_id)",
+      ");",
       "CREATE TABLE IF NOT EXISTS game_saves (",
       "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
       "  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,",
@@ -893,8 +1094,19 @@ class AntarcticCommunityStore {
       "CREATE INDEX IF NOT EXISTS idx_thread_participants_user_id ON thread_participants(user_id);",
       "CREATE INDEX IF NOT EXISTS idx_direct_requests_target_status ON direct_requests(target_user_id, status, created_at);",
       "CREATE INDEX IF NOT EXISTS idx_direct_requests_requester_status ON direct_requests(requester_user_id, status, created_at);",
+      "CREATE INDEX IF NOT EXISTS idx_room_invitations_user_status ON room_invitations(user_id, status, updated_at);",
       "CREATE INDEX IF NOT EXISTS idx_game_saves_user_id ON game_saves(user_id, updated_at);"
     ].join("\n"));
+
+    if (!this.tableHasColumn("threads", "visibility")) {
+      this.run("ALTER TABLE threads ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public'");
+    }
+    if (!this.tableHasColumn("users", "muted_until")) {
+      this.run("ALTER TABLE users ADD COLUMN muted_until TEXT NOT NULL DEFAULT ''");
+    }
+    if (!this.tableHasColumn("users", "muted_reason")) {
+      this.run("ALTER TABLE users ADD COLUMN muted_reason TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   /**
@@ -912,7 +1124,7 @@ class AntarcticCommunityStore {
       this.run(
         [
           "INSERT INTO users (username, username_normalized, password_hash, password_salt, created_at, updated_at)",
-          "VALUES ('antarctic', 'antarctic', ?, ?, ?, ?)"
+          `VALUES ('${DEFAULT_SYSTEM_USERNAME}', '${DEFAULT_SYSTEM_USERNAME}', ?, ?, ?, ?)`
         ].join(" "),
         [hash, salt, nowIso, nowIso]
       );
@@ -922,8 +1134,8 @@ class AntarcticCommunityStore {
     const nowIso = this.nowIso();
     this.run(
       [
-        "INSERT INTO threads (type, name, owner_user_id, direct_key, created_at, updated_at)",
-        "VALUES ('room', ?, ?, NULL, ?, ?)"
+        "INSERT INTO threads (type, name, visibility, owner_user_id, direct_key, created_at, updated_at)",
+        "VALUES ('room', ?, 'public', ?, NULL, ?, ?)"
       ].join(" "),
       [DEFAULT_ROOM_NAME, ownerId, nowIso, nowIso]
     );
@@ -1010,7 +1222,7 @@ class AntarcticCommunityStore {
   getThreadForUser(userId, threadId) {
     const row = this.get(
       [
-        "SELECT threads.id, threads.type, threads.name, threads.owner_user_id, threads.created_at, threads.updated_at,",
+        "SELECT threads.id, threads.type, threads.name, threads.visibility, threads.owner_user_id, threads.created_at, threads.updated_at,",
         "other_user.id AS other_user_id, other_user.username AS other_user_username,",
         "messages.id AS last_message_id, messages.content AS last_message_content, messages.created_at AS last_message_created_at,",
         "message_author.username AS last_message_author_username",
@@ -1117,6 +1329,7 @@ class AntarcticCommunityStore {
       id: Number(row.id),
       type,
       name: type === "direct" ? (peer ? peer.username : "Direct message") : String(row.name || ""),
+      visibility: type === "room" ? String(row.visibility || "public") : "",
       ownerUserId: Number(row.owner_user_id || 0),
       createdAt: String(row.created_at || ""),
       updatedAt: String(row.updated_at || ""),
@@ -1181,6 +1394,70 @@ class AntarcticCommunityStore {
   }
 
   /**
+   * Normalizes room visibility for creation and rendering.
+   *
+   * @param {string} visibility - Candidate visibility.
+   * @returns {"public"|"private"} Sanitized visibility mode.
+   */
+  normalizeRoomVisibility(visibility) {
+    const normalized = cleanText(visibility || "public").toLowerCase();
+    if (!normalized || normalized === "public") return "public";
+    if (normalized === "private") return "private";
+    throw new Error("Room visibility must be public or private.");
+  }
+
+  /**
+   * Normalizes a list of usernames invited to a private room.
+   *
+   * @param {string[]|string} invitedUsers - Candidate usernames.
+   * @param {number} currentUserId - Creating user id for self-filtering.
+   * @returns {string[]} Sanitized unique usernames.
+   */
+  normalizeInvitedUsernames(invitedUsers, currentUserId) {
+    const rawList = Array.isArray(invitedUsers)
+      ? invitedUsers
+      : String(invitedUsers || "").split(/[,\n]/g);
+    const currentUser = this.get("SELECT username_normalized FROM users WHERE id = ?", [Number(currentUserId)]);
+    const currentUsername = String(currentUser && currentUser.username_normalized ? currentUser.username_normalized : "");
+    const seen = new Set();
+    const normalized = [];
+
+    for (const entry of rawList) {
+      const value = cleanText(entry);
+      if (!value) continue;
+      const username = this.normalizeUsername(value).toLowerCase();
+      if (!username || username === currentUsername || seen.has(username)) {
+        continue;
+      }
+      seen.add(username);
+      normalized.push(username);
+    }
+
+    if (normalized.length > MAX_PRIVATE_ROOM_INVITES) {
+      throw new Error(`Private rooms can invite up to ${MAX_PRIVATE_ROOM_INVITES} users at once.`);
+    }
+
+    return normalized;
+  }
+
+  /**
+   * Normalizes invited usernames and ensures each target account exists.
+   *
+   * @param {string[]|string} invitedUsers - Candidate usernames.
+   * @param {number} currentUserId - Creating user id for self-filtering.
+   * @returns {string[]} Existing usernames normalized for storage.
+   */
+  resolveInvitedUsers(invitedUsers, currentUserId) {
+    const normalizedUsers = this.normalizeInvitedUsernames(invitedUsers, currentUserId);
+    for (const username of normalizedUsers) {
+      if (!this.findUserByUsername(username)) {
+        throw new Error(`Could not find invited user @${username}.`);
+      }
+    }
+    return normalizedUsers;
+  }
+
+  /**
    * Normalizes a game key used for cloud saves.
    *
    * @param {string} gameKey - Candidate key.
@@ -1195,6 +1472,58 @@ class AntarcticCommunityStore {
       throw new Error("Game key is too long.");
     }
     return normalized;
+  }
+
+  /**
+   * Returns the built-in Antarctic system user row used for service DMs.
+   *
+   * @returns {object|null} System user row or null.
+   */
+  getSystemUser() {
+    return this.get("SELECT * FROM users WHERE username_normalized = ? LIMIT 1", [DEFAULT_SYSTEM_USERNAME]) ||
+      this.get("SELECT * FROM users ORDER BY id ASC LIMIT 1");
+  }
+
+  /**
+   * Returns the current mute state if the user is still muted.
+   *
+   * @param {number} userId - User id.
+   * @returns {{ until: string, message: string }|null} Active mute details or null.
+   */
+  getActiveMute(userId) {
+    const row = this.get("SELECT muted_until, muted_reason FROM users WHERE id = ?", [Number(userId)]);
+    const mutedUntil = String(row && row.muted_until ? row.muted_until : "");
+    if (!mutedUntil) {
+      return null;
+    }
+
+    if (new Date(mutedUntil).getTime() <= new Date(this.nowIso()).getTime()) {
+      this.run("UPDATE users SET muted_until = '', muted_reason = '' WHERE id = ?", [Number(userId)]);
+      this.queueFlush();
+      return null;
+    }
+
+    return {
+      until: mutedUntil,
+      message: `You are muted until ${mutedUntil} for ${String(row && row.muted_reason ? row.muted_reason : "automod")}.`
+    };
+  }
+
+  /**
+   * Applies the built-in language automod mute and returns the user-facing error text.
+   *
+   * @param {number} userId - User id to mute.
+   * @param {string} blockedTerm - Matched blocked term.
+   * @returns {string} Error text shown to the user.
+   */
+  applyAutomodMute(userId, blockedTerm) {
+    const mutedUntil = toIsoNow(new Date(this.now()).getTime() + AUTOMOD_MUTE_MS);
+    this.run(
+      "UPDATE users SET muted_until = ?, muted_reason = ?, updated_at = ? WHERE id = ?",
+      [mutedUntil, AUTOMOD_MUTED_REASON, this.nowIso(), Number(userId)]
+    );
+    this.queueFlush();
+    return `Automod muted you for 3 minutes because of blocked language ("${blockedTerm}").`;
   }
 
   /**

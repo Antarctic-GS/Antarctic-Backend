@@ -116,3 +116,64 @@ test("community store supports auth, rooms, DM requests, direct messages, and cl
   const matches = store.searchUsers(firstAuth.user.id, "bliz");
   assert.deepEqual(matches.map((entry) => entry.username), ["blizzard"]);
 });
+
+test("community store supports private room invites, Antarctic invite DMs, and automod mutes", async (t) => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "antarctic-community-private-"));
+  const dbPath = path.join(tempDir, "community.sqlite");
+  const store = new AntarcticCommunityStore({ dbPath, now: () => new Date("2026-03-22T15:00:00.000Z") });
+  await store.initialize();
+
+  t.after(async () => {
+    await store.flush();
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const owner = await store.signUp({ username: "owner", password: "icepass123" });
+  const invited = await store.signUp({ username: "guest", password: "windpass123" });
+  const outsider = await store.signUp({ username: "outsider", password: "polarpass123" });
+
+  const privateRoom = await store.createRoom(owner.user.id, "Secret Ops", {
+    visibility: "private",
+    invitedUsers: ["guest"]
+  });
+  assert.equal(privateRoom.visibility, "private");
+
+  const invitedCatalog = store.listThreadsForUser(invited.user.id);
+  const invitedRoom = invitedCatalog.rooms.find((room) => room.name === "Secret Ops");
+  assert.ok(invitedRoom);
+  assert.equal(invitedRoom.invited, true);
+  assert.equal(invitedRoom.joined, false);
+
+  const outsiderCatalog = store.listThreadsForUser(outsider.user.id);
+  assert.equal(outsiderCatalog.rooms.some((room) => room.name === "Secret Ops"), false);
+
+  const antarcticThread = invitedCatalog.threads.find((thread) => thread.type === "direct" && thread.peer && thread.peer.username === "antarctic");
+  assert.ok(antarcticThread);
+  const antarcticMessages = store.listMessages(invited.user.id, antarcticThread.id);
+  assert.ok(antarcticMessages.some((message) => message.content.includes("Secret Ops")));
+
+  await assert.rejects(
+    () => store.joinRoom(outsider.user.id, privateRoom.id),
+    /invite-only/
+  );
+
+  await store.joinRoom(invited.user.id, privateRoom.id);
+  const joinedCatalog = store.listThreadsForUser(invited.user.id);
+  const joinedRoom = joinedCatalog.rooms.find((room) => room.name === "Secret Ops");
+  assert.ok(joinedRoom);
+  assert.equal(joinedRoom.joined, true);
+  assert.equal(joinedRoom.invited, false);
+
+  await assert.rejects(
+    () => store.addMessage(invited.user.id, privateRoom.id, "shit this is loud"),
+    /Automod muted you for 3 minutes/
+  );
+  await assert.rejects(
+    () => store.addMessage(invited.user.id, privateRoom.id, "can anyone hear me"),
+    /You are muted until/
+  );
+  await assert.rejects(
+    () => store.addMessage(owner.user.id, privateRoom.id, "x".repeat(2001)),
+    /Messages must stay under 2000 characters/
+  );
+});

@@ -1101,7 +1101,10 @@ async function routeRequest(req, res, config) {
     if (!payload) return;
 
     try {
-      const thread = await managed.runtime.communityStore.createRoom(session.user.id, payload.name);
+      const thread = await managed.runtime.communityStore.createRoom(session.user.id, payload.name, {
+        visibility: payload.visibility,
+        invitedUsers: payload.invitedUsers
+      });
       const snapshot = managed.runtime.communityStore.getCommunitySnapshot(session.user.id);
       sendJson(res, 201, { ok: true, thread, ...snapshot }, config);
     } catch (error) {

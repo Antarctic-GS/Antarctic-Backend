@@ -198,6 +198,120 @@ test("backend serves account auth, chat, and cloud save endpoints on top of sqli
   assert.equal(bootstrap.body.bootstrap.incomingDirectRequests.length, 0);
 });
 
+test("backend supports private-room invites, Antarctic invite DMs, and chat automod", async (t) => {
+  const port = await getOpenPort();
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), "antarctic-community-private-api-"));
+  const configPath = path.join(tempDir, "palladium.env");
+  const dbPath = path.join(tempDir, "community.sqlite");
+
+  await fsp.writeFile(
+    configPath,
+    [
+      "SITE_HOST=127.0.0.1",
+      `SITE_PORT=${port}`,
+      "CORS_ORIGIN=*",
+      "OLLAMA_AUTOSTART=false",
+      "DISCORD_BOTS_AUTOSTART=false",
+      "GIT_AUTO_PULL_ENABLED=false",
+      `ACCOUNT_SQLITE_PATH=${dbPath}`,
+      "ACCOUNT_SESSION_TTL_DAYS=30"
+    ].join("\n") + "\n",
+    "utf8"
+  );
+
+  const { child, output } = startBackend(configPath);
+
+  t.after(async () => {
+    await stopBackend(child);
+    await fsp.rm(tempDir, { recursive: true, force: true });
+  });
+
+  const base = `http://127.0.0.1:${port}`;
+  await waitForServer(`${base}/health`, output);
+
+  const ownerSignup = await fetchJson(`${base}/api/account/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "owner", password: "icepass123" })
+  });
+  const guestSignup = await fetchJson(`${base}/api/account/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "guest", password: "windpass123" })
+  });
+  const outsiderSignup = await fetchJson(`${base}/api/account/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ username: "outsider", password: "polarpass123" })
+  });
+
+  const ownerHeaders = { "x-antarctic-session": ownerSignup.body.token, "content-type": "application/json" };
+  const guestHeaders = { "x-antarctic-session": guestSignup.body.token, "content-type": "application/json" };
+  const outsiderHeaders = { "x-antarctic-session": outsiderSignup.body.token, "content-type": "application/json" };
+
+  const privateRoom = await fetchJson(`${base}/api/chat/rooms`, {
+    method: "POST",
+    headers: ownerHeaders,
+    body: JSON.stringify({
+      name: "Secret Ops",
+      visibility: "private",
+      invitedUsers: ["guest"]
+    })
+  });
+  assert.equal(privateRoom.status, 201);
+  assert.equal(privateRoom.body.thread.visibility, "private");
+
+  const guestThreads = await fetchJson(`${base}/api/chat/threads`, { headers: guestHeaders });
+  assert.equal(guestThreads.status, 200);
+  const invitedRoom = guestThreads.body.rooms.find((room) => room.name === "Secret Ops");
+  assert.ok(invitedRoom);
+  assert.equal(invitedRoom.invited, true);
+  const antarcticThread = guestThreads.body.threads.find((thread) => thread.type === "direct" && thread.peer && thread.peer.username === "antarctic");
+  assert.ok(antarcticThread);
+
+  const antarcticMessages = await fetchJson(`${base}/api/chat/threads/${antarcticThread.id}/messages`, { headers: guestHeaders });
+  assert.equal(antarcticMessages.status, 200);
+  assert.ok(antarcticMessages.body.messages.some((message) => message.content.includes("Secret Ops")));
+
+  const outsiderJoin = await fetchJson(`${base}/api/chat/threads/${privateRoom.body.thread.id}/join`, {
+    method: "POST",
+    headers: outsiderHeaders
+  });
+  assert.equal(outsiderJoin.status, 404);
+  assert.match(String(outsiderJoin.body.error || ""), /invite-only/i);
+
+  const guestJoin = await fetchJson(`${base}/api/chat/threads/${privateRoom.body.thread.id}/join`, {
+    method: "POST",
+    headers: guestHeaders
+  });
+  assert.equal(guestJoin.status, 200);
+  assert.equal(guestJoin.body.thread.visibility, "private");
+
+  const automod = await fetchJson(`${base}/api/chat/threads/${privateRoom.body.thread.id}/messages`, {
+    method: "POST",
+    headers: guestHeaders,
+    body: JSON.stringify({ content: "shit this room is loud" })
+  });
+  assert.equal(automod.status, 400);
+  assert.match(String(automod.body.error || ""), /Automod muted you for 3 minutes/i);
+
+  const mutedFollowup = await fetchJson(`${base}/api/chat/threads/${privateRoom.body.thread.id}/messages`, {
+    method: "POST",
+    headers: guestHeaders,
+    body: JSON.stringify({ content: "hello?" })
+  });
+  assert.equal(mutedFollowup.status, 400);
+  assert.match(String(mutedFollowup.body.error || ""), /You are muted until/i);
+
+  const tooLong = await fetchJson(`${base}/api/chat/threads/${privateRoom.body.thread.id}/messages`, {
+    method: "POST",
+    headers: ownerHeaders,
+    body: JSON.stringify({ content: "x".repeat(2001) })
+  });
+  assert.equal(tooLong.status, 400);
+  assert.match(String(tooLong.body.error || ""), /2000 characters/i);
+});
+
 function startBackend(configPath) {
   const child = spawn(process.execPath, ["apps.js"], {
     cwd: BACKEND_DIR,

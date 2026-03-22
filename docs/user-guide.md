@@ -1,6 +1,6 @@
 # User Guide
 
-This backend is the API side of Antarctic Games. It is meant to run behind `api.sethpang.com` while the website itself is hosted statically elsewhere, or directly serve the separate frontend checkout when `FRONTEND_STATIC_DIR` is set.
+This backend is the API side of Antarctic Games. It is meant to run behind `sethpang.com`, either by directly serving the separate frontend checkout through `FRONTEND_STATIC_DIR` or by answering the `/api/...` routes for a static frontend hosted elsewhere.
 
 Daily use:
 
@@ -21,6 +21,8 @@ Supported backend features:
 - SQLite-backed account sessions at `GET /api/account/session`, `POST /api/account/signup`, and `POST /api/account/login`
 - one-call community bootstrap at `GET /api/community/bootstrap` plus auth responses that include the same bootstrap payload
 - room chat + DM requests at `GET /api/chat/threads`, `POST /api/chat/rooms`, `POST /api/chat/dms`, `POST /api/chat/dms/:id/accept`, and `POST /api/chat/dms/:id/deny`
+- room creation supports `public` and `private` visibility; private rooms accept invite usernames, notify those users via an Antarctic system DM, and only invited users can join
+- chat messages cap at 2000 characters, and the built-in automod applies a short mute when blocked profanity is sent
 - cloud saves at `GET /api/saves` and `PUT /api/saves/:gameKey`
 - URL/link analysis for Discord flows at `/link-check`
 - optional static frontend passthrough from `FRONTEND_STATIC_DIR`
@@ -39,4 +41,6 @@ Before deploying:
 4. Confirm account/session, signup, login, and `/api/community/bootstrap` all return the expected authenticated bootstrap payload for the logged-in UI, including `incomingDirectRequests`.
 5. If `FRONTEND_STATIC_DIR` is set, confirm `/` serves the frontend shell and asset paths resolve from that checkout.
 6. Create two throwaway accounts and confirm a DM request appears in the target user's `incomingDirectRequests`, can be accepted or denied, and accepted requests become normal direct-message threads in SQLite.
-7. If `FRONTEND_STATIC_DIR` is blank, confirm the static frontend is pointed at this backend base URL.
+7. Create a private room with invited usernames and confirm the invited user sees the room in the catalog, receives an Antarctic invite DM, and can join while an uninvited user is rejected.
+8. Send a blocked profanity string in chat and confirm the message is rejected with a temporary automod mute response.
+9. If `FRONTEND_STATIC_DIR` is blank, confirm the static frontend is pointed at `https://sethpang.com`.
