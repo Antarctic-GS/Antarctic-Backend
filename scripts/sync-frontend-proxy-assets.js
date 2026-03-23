@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 
+const cp = require("node:child_process");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const path = require("node:path");
 
 const BACKEND_DIR = path.resolve(__dirname, "..");
+const RUNTIME_PACKAGE_NAMES = [
+  "@mercuryworkshop/scramjet",
+  "@mercuryworkshop/bare-mux",
+  "@mercuryworkshop/libcurl-transport"
+];
 const ASSET_TARGETS = [
   {
     sourcePath: path.join("node_modules", "@mercuryworkshop", "scramjet", "dist", "scramjet.all.js"),
@@ -49,6 +55,27 @@ function resolveFrontendDir(baseDir = BACKEND_DIR) {
   );
 }
 
+function readBackendPackageJson(backendDir = BACKEND_DIR) {
+  const packageJsonPath = path.join(path.resolve(backendDir), "package.json");
+  return JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+}
+
+function getProxyRuntimePackageSpecs(backendDir = BACKEND_DIR) {
+  const packageJson = readBackendPackageJson(backendDir);
+  const dependencies = packageJson && packageJson.dependencies ? packageJson.dependencies : {};
+  return RUNTIME_PACKAGE_NAMES.map((name) => {
+    const spec = String(dependencies[name] || "").trim();
+    if (!spec) {
+      throw new Error(`Missing ${name} in ${path.join(path.resolve(backendDir), "package.json")}.`);
+    }
+
+    return {
+      name,
+      spec
+    };
+  });
+}
+
 function resolveAssetPairs(options = {}) {
   const backendDir = path.resolve(options.backendDir || BACKEND_DIR);
   const frontendDir = path.resolve(options.frontendDir || resolveFrontendDir(backendDir));
@@ -84,6 +111,80 @@ async function wipeFrontendProxyAssets(frontendDir) {
   }
 }
 
+function getBackendProxyPackageDirs(backendDir, packageSpecs) {
+  return packageSpecs.map((entry) =>
+    path.join(path.resolve(backendDir), "node_modules", ...String(entry.name || "").split("/"))
+  );
+}
+
+function getProxyRuntimeNpmCacheDir(backendDir) {
+  return path.join(path.resolve(backendDir), ".npm-cache");
+}
+
+function runInstallCommand(backendDir, command, args, env) {
+  return new Promise((resolve, reject) => {
+    const child = cp.spawn(command, args, {
+      cwd: backendDir,
+      env: env,
+      stdio: "inherit"
+    });
+
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`${command} ${args.join(" ")} exited with code ${code}.`));
+    });
+  });
+}
+
+async function reinstallBackendProxyPackages(options = {}) {
+  const backendDir = path.resolve(options.backendDir || BACKEND_DIR);
+  const packageSpecs = Array.isArray(options.packageSpecs) && options.packageSpecs.length
+    ? options.packageSpecs.map((entry) => ({
+        name: String(entry.name || "").trim(),
+        spec: String(entry.spec || "").trim()
+      }))
+    : getProxyRuntimePackageSpecs(backendDir);
+  const runInstall = typeof options.runInstall === "function"
+    ? options.runInstall
+    : function defaultRunInstall(context) {
+        return runInstallCommand(context.backendDir, context.command, context.args, context.env);
+      };
+  const command = String(options.npmCommand || "npm").trim() || "npm";
+  const npmCacheDir = path.resolve(options.npmCacheDir || getProxyRuntimeNpmCacheDir(backendDir));
+
+  for (const packageDir of getBackendProxyPackageDirs(backendDir, packageSpecs)) {
+    await fsp.rm(packageDir, { recursive: true, force: true });
+  }
+
+  const args = ["install", "--no-save"].concat(
+    packageSpecs.map((entry) => `${entry.name}@${entry.spec}`)
+  );
+  const env = Object.assign({}, process.env, {
+    npm_config_cache: npmCacheDir
+  });
+
+  await runInstall({
+    backendDir,
+    command,
+    args,
+    env,
+    packageSpecs
+  });
+
+  return {
+    backendDir,
+    command,
+    args,
+    env,
+    npmCacheDir,
+    packageSpecs
+  };
+}
+
 async function getMismatchedProxyAssets(assetPairs) {
   const mismatches = [];
 
@@ -110,7 +211,17 @@ async function syncFrontendProxyAssets(options = {}) {
   const frontendDir = path.resolve(options.frontendDir || resolveFrontendDir(backendDir));
   const clean = Boolean(options.clean);
   const check = Boolean(options.check);
+  const reinstall = Boolean(options.reinstall);
   const assetPairs = resolveAssetPairs({ backendDir, frontendDir });
+
+  if (reinstall) {
+    await reinstallBackendProxyPackages({
+      backendDir,
+      npmCommand: options.npmCommand,
+      packageSpecs: options.packageSpecs,
+      runInstall: options.runInstall
+    });
+  }
 
   await ensureSourceAssetsExist(assetPairs, backendDir);
 
@@ -143,14 +254,16 @@ async function syncFrontendProxyAssets(options = {}) {
     backendDir,
     frontendDir,
     count: assetPairs.length,
-    cleaned: clean
+    cleaned: clean,
+    reinstalled: reinstall
   };
 }
 
 function parseArgs(argv) {
   return {
     check: argv.includes("--check"),
-    clean: argv.includes("--clean")
+    clean: argv.includes("--clean"),
+    reinstall: argv.includes("--reinstall")
   };
 }
 
@@ -164,7 +277,7 @@ async function main() {
 
   console.log(
     "%s %d Scramjet proxy assets into %s",
-    result.cleaned ? "Refreshed" : "Synced",
+    result.reinstalled ? "Reinstalled and refreshed" : result.cleaned ? "Refreshed" : "Synced",
     result.count,
     result.frontendDir
   );
@@ -181,6 +294,9 @@ module.exports = {
   ASSET_TARGETS,
   BACKEND_DIR,
   getMismatchedProxyAssets,
+  getProxyRuntimePackageSpecs,
+  getProxyRuntimeNpmCacheDir,
+  reinstallBackendProxyPackages,
   resolveAssetPairs,
   resolveFrontendDir,
   syncFrontendProxyAssets,

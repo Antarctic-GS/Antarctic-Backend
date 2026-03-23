@@ -12,6 +12,7 @@ Daily use:
 5. Verify the runtime with `GET /health` and `GET /api/proxy/health`.
 6. If you are moving an existing SQLite community database into Supabase, run `npm run migrate:supabase` after `SUPABASE_DB_URL` is configured. The script reads `ACCOUNT_SQLITE_PATH` and `SUPABASE_DB_URL` from `config/palladium.env` by default and resets the target Supabase tables before importing.
 7. If you want to refresh the static proxy runtime shipped to the sibling frontend checkout, run `npm run refresh:frontend-proxy`. Use `npm run sync:frontend-proxy` when you only need to copy the current installed assets without wiping the frontend runtime folders first.
+8. If you want to completely delete and redownload the MercuryWorkshop proxy runtime before resyncing the frontend, run `npm run reinstall:frontend-proxy`.
 
 Supported backend features:
 
@@ -50,3 +51,4 @@ Before deploying:
 9. If `FRONTEND_STATIC_DIR` is blank, confirm the static frontend is pointed at `https://sethpang.com`.
 10. If you migrated from SQLite to Supabase, log into an old account, open the community chat, verify private room invites still appear as Antarctic DMs, and confirm at least one cloud save is still present.
 11. If a sibling frontend checkout exists, confirm `npm run verify` passes after any proxy-runtime package update; it now fails if the vendored frontend Scramjet/BareMux/libcurl assets drift out of sync with the backend packages.
+12. If Scramjet still behaves strangely after a normal refresh, run `npm run reinstall:frontend-proxy` once so the backend deletes the installed proxy packages, redownloads them, and recopies the frontend runtime from scratch.

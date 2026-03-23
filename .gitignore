@@ -8,5 +8,6 @@ backend/config/game-play-stats.json
 scramjet-service/node_modules/
 backend/services/**/node_modules/
 *.log
+.npm-cache/
 node_modules/
 target/antarctic-community.sqlite
