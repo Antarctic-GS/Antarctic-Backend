@@ -94,7 +94,8 @@ Auth bootstrap behavior:
 - `POST /api/chat/dms` creates a pending DM request unless a direct thread already exists or the other user already requested you, in which case the request is resolved into the shared thread immediately.
 - chat messages stay capped at 2000 characters, and the built-in automod applies a short mute when blocked profanity is sent.
 - AI chat requests are normalized for low-latency shell responses by default, with shorter context/prediction limits and long-lived Ollama keep-alive reuse.
-- The static frontend prefers Wisp for Scramjet, but can fall back to `POST /api/proxy/request` when a reverse proxy is not forwarding `/wisp/` websocket upgrades correctly.
+- `/api/config/public` and `/api/proxy/health` now advertise the backend HTTP fallback proxy as the ready low-latency transport while still exposing `/wisp/` for deployments that want the websocket path.
+- The static frontend now prefers the backend HTTP fallback for fast first paint, but can still use `/wisp/` when a deployment explicitly asks for it.
 - when `FRONTEND_STATIC_DIR` is serving the frontend shell, `/service/scramjet/...` falls back to the shell instead of 404ing, so the proxy bootstrap survives encoded target URLs with dots in them.
 
 Docs:

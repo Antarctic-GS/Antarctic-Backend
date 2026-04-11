@@ -20,7 +20,7 @@ Supported backend features:
 - AI chat requests through Ollama at `POST /api/ai/chat`
 - AI chat defaults are tuned for fast shell replies, so the frontend can stream shorter low-latency answers without extra per-request config
 - Scramjet proxy metadata and fetch endpoints
-- backend HTTP proxy fallback at `POST /api/proxy/request?url=...` for sites where `/wisp/` websocket upgrades are unavailable
+- backend HTTP proxy fallback at `POST /api/proxy/request?url=...`, advertised as the ready startup transport so the shell can boot browsing without waiting on a websocket probe
 - Wisp websocket transport at `/wisp/`
 - frontend shell fallback for `/service/scramjet/...` when the backend is serving `FRONTEND_STATIC_DIR`
 - Supabase-backed account sessions at `GET /api/account/session`, `POST /api/account/signup`, and `POST /api/account/login`
@@ -41,7 +41,7 @@ Not supported here anymore:
 Before deploying:
 
 1. Run `npm run verify`.
-2. Confirm `/api/config/public` returns the expected proxy, AI, Discord, and community endpoints.
+2. Confirm `/api/config/public` returns the expected proxy, AI, Discord, and community endpoints, including `proxyMode=http-fallback`, `proxyTransport=http-fallback`, `/api/proxy/fetch`, `/api/proxy/request`, and the `/wisp/` metadata.
 3. If the site is fronted by nginx or another reverse proxy, confirm `/wisp/` really upgrades as a websocket. If it does not, the frontend can still browse over `POST /api/proxy/request`, but websocket-heavy sites will be limited until `/wisp/` is fixed upstream.
 4. Confirm account/session, signup, login, and `/api/community/bootstrap` all return the expected authenticated bootstrap payload for the logged-in UI, including `incomingDirectRequests`.
 5. If `FRONTEND_STATIC_DIR` is set, confirm `/` serves the frontend shell and asset paths resolve from that checkout.

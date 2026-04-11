@@ -375,6 +375,52 @@ function toWebSocketUrl(originValue, pathValue) {
   }
 }
 
+function resolveConfiguredProxyBase(config, backendOrigin) {
+  const configuredProxyBase = String(config.proxyBaseUrl || "").trim();
+  if (!configuredProxyBase) {
+    return String(backendOrigin || "").trim();
+  }
+
+  let candidate = configuredProxyBase;
+  if (!/^https?:\/\//i.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+
+  try {
+    return new URL(candidate).origin;
+  } catch {
+    return String(backendOrigin || "").trim();
+  }
+}
+
+function buildPublicProxyServices(config, backendOrigin) {
+  const normalizedBackendOrigin = String(backendOrigin || "").trim();
+  const normalizedWispPath = normalizeWebSocketPath(SCRAMJET_WISP_PATH);
+  return {
+    proxy: "/api/proxy/fetch",
+    proxyFetch: "/api/proxy/fetch",
+    proxyRequest: "/api/proxy/request",
+    proxyBase: resolveConfiguredProxyBase(config, normalizedBackendOrigin),
+    proxyMode: "http-fallback",
+    proxyTransport: "http-fallback",
+    wispPath: normalizedWispPath,
+    wispUrl: normalizedBackendOrigin ? toWebSocketUrl(normalizedBackendOrigin, normalizedWispPath) : ""
+  };
+}
+
+function buildProxyHealthPayload(config, backendOrigin) {
+  const services = buildPublicProxyServices(config, backendOrigin);
+  return {
+    ok: true,
+    service: "backend",
+    transport: services.proxyTransport,
+    message: "Built-in web browsing is ready.",
+    proxyRequest: services.proxyRequest,
+    proxyFetch: services.proxyFetch,
+    wispUrl: services.wispUrl
+  };
+}
+
 function readString(env, key, fallback) {
   const value = env[key];
   if (typeof value === "string" && value.trim() !== "") {
@@ -921,15 +967,11 @@ async function routeRequest(req, res, config) {
   }
 
   if (url.pathname === "/api/proxy/health") {
+    const backendOrigin = requestOrigin(req);
     sendJson(
       res,
-      503,
-      {
-        ok: false,
-        service: "disabled",
-        transport: "disabled",
-        message: "Built-in web browsing is temporarily disabled."
-      },
+      200,
+      buildProxyHealthPayload(config, backendOrigin),
       config
     );
     return;
@@ -937,19 +979,7 @@ async function routeRequest(req, res, config) {
 
   if (url.pathname === "/api/config/public") {
     const backendOrigin = requestOrigin(req);
-    const configuredProxyBase = String(config.proxyBaseUrl || "").trim();
-    let proxyBase = "";
-    if (configuredProxyBase) {
-      let candidate = configuredProxyBase;
-      if (!/^https?:\/\//i.test(candidate)) {
-        candidate = `https://${candidate}`;
-      }
-      try {
-        proxyBase = new URL(candidate).origin;
-      } catch {
-        proxyBase = "";
-      }
-    }
+    const proxyServices = buildPublicProxyServices(config, backendOrigin);
 
     sendJson(
       res,
@@ -958,14 +988,7 @@ async function routeRequest(req, res, config) {
         ok: true,
         backendBase: backendOrigin,
         services: {
-          proxy: "",
-          proxyFetch: "",
-          proxyRequest: "",
-          proxyBase,
-          proxyMode: "disabled",
-          proxyTransport: "disabled",
-          wispPath: "",
-          wispUrl: "",
+          ...proxyServices,
           aiChat: "/api/ai/chat",
           defaultAiModel: config.ollamaModel,
           accountSession: "/api/account/session",

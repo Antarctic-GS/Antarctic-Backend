@@ -58,7 +58,7 @@ test("frontend shell ships the built-in antarctic routes with the bundled proxy 
   assert.match(shellPage, /antarctic:\/\/settings/);
   assert.match(shellPage, /scram\/scramjet\.all\.js/);
   assert.match(shellPage, /baremux\/index\.js/);
-  assert.match(shellPage, /Built-in web browsing is temporarily disabled/);
+  assert.match(shellPage, /Preparing built-in web browsing/);
 });
 
 test("frontend root only keeps one app shell html entrypoint", () => {
